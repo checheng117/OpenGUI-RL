@@ -1,2 +1,2 @@
 # Cross-Website-GUI-Grounding-with-Verifiable-Reward-Optimization
-CSC5051 Final Project
+CSC6129 RL Final Project
