@@ -1,0 +1,43 @@
+# Stage B: Candidate generation + reward-based reranking
+experiment:
+  name: rerank_reward
+  stage: B
+  description: Train a reranker using verifiable reward labels
+
+model:
+  config: configs/model/qwen2_vl_2b.yaml
+  sft_checkpoint: outputs/sft_baseline/checkpoint-best
+
+candidate_generation:
+  mode: model  # dummy | heuristic | model
+  num_candidates: 8
+  temperature: 0.7
+
+reward:
+  weights:
+    element_correct: 1.0
+    iou: 0.5
+    click_inside_target: 0.3
+    action_type_correct: 0.2
+    invalid_format_penalty: 0.5
+
+data:
+  train:
+    config: configs/data/mind2web.yaml
+    split: train
+  eval:
+    config: configs/data/mind2web.yaml
+    split: test_task
+
+training:
+  output_dir: outputs/reranker
+  num_epochs: 5
+  batch_size: 16
+  learning_rate: 1.0e-4
+  margin: 0.1
+  seed: 42
+
+wandb:
+  enabled: false
+  project: gui-grounding
+  run_name: reranker

@@ -1,0 +1,39 @@
+# Stage A: Supervised Fine-Tuning baseline
+experiment:
+  name: sft_baseline
+  stage: A
+  description: Supervised grounding on Mind2Web train split
+
+model:
+  config: configs/model/qwen2_vl_2b.yaml
+
+data:
+  train:
+    config: configs/data/mind2web.yaml
+    split: train
+    max_samples: null  # null = use all
+  eval:
+    config: configs/data/mind2web.yaml
+    split: test_task
+
+training:
+  output_dir: outputs/sft_baseline
+  num_epochs: 3
+  batch_size: 4
+  gradient_accumulation_steps: 4
+  learning_rate: 2.0e-5
+  weight_decay: 0.01
+  warmup_ratio: 0.1
+  lr_scheduler: cosine
+  max_grad_norm: 1.0
+  save_steps: 500
+  eval_steps: 500
+  logging_steps: 50
+  seed: 42
+  fp16: false
+  bf16: true
+
+wandb:
+  enabled: false
+  project: gui-grounding
+  run_name: sft-baseline

@@ -1,0 +1,33 @@
+# Cross-website / cross-domain transfer evaluation
+evaluation:
+  name: transfer_eval
+  description: Evaluate generalization across task/website/domain splits
+
+model:
+  config: configs/model/qwen2_vl_2b.yaml
+  checkpoint: outputs/sft_baseline/checkpoint-best
+
+datasets:
+  - config: configs/data/mind2web.yaml
+    split: test_task
+    label: mind2web_task
+  - config: configs/data/mind2web.yaml
+    split: test_website
+    label: mind2web_website
+  - config: configs/data/mind2web.yaml
+    split: test_domain
+    label: mind2web_domain
+  - config: configs/data/screenspot_v2.yaml
+    split: test
+    label: screenspot_v2
+
+metrics:
+  - element_accuracy
+  - point_accuracy
+  - mean_iou
+  - iou@0.5
+  - action_type_accuracy
+
+output:
+  output_dir: outputs/eval/transfer
+  save_predictions: true

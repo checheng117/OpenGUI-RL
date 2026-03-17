@@ -1,0 +1,17 @@
+# Demo configuration
+demo:
+  name: gui_grounding_demo
+  description: Interactive GUI grounding visualization
+
+model:
+  config: configs/model/qwen2_vl_2b.yaml
+  checkpoint: null  # set to a checkpoint path to use a real model
+
+server:
+  port: 7860
+  share: false
+
+visualization:
+  bbox_color: red
+  gt_color: green
+  click_radius: 8

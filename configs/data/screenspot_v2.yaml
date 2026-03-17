@@ -1,0 +1,19 @@
+dataset:
+  name: screenspot_v2
+  role: eval
+  data_dir: data/raw/screenspot_v2
+  splits:
+    - test
+  eval_split: test
+
+  platforms:
+    - desktop
+    - mobile
+    - web
+
+  image_dir: images
+  annotation_format: jsonl
+
+  max_image_size: 1344
+
+  # TODO(stage-2): verify exact format from ScreenSpot-v2 release

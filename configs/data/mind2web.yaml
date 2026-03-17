@@ -1,0 +1,23 @@
+dataset:
+  name: mind2web
+  role: train+eval
+  data_dir: data/raw/mind2web
+  splits:
+    - train
+    - test_task
+    - test_website
+    - test_domain
+  train_split: train
+
+  # Stats from the Mind2Web paper
+  train_actions: 7775
+  train_tasks: 1009
+
+  image_dir: screenshots
+  annotation_format: jsonl
+
+  # Preprocessing
+  max_image_size: 1344
+  max_candidates: 32
+
+  # TODO(stage-2): update paths after downloading the dataset

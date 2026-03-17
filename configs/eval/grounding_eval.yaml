@@ -1,0 +1,26 @@
+# Grounding evaluation on a single dataset
+evaluation:
+  name: grounding_eval
+  description: Evaluate GUI grounding quality on held-out set
+
+model:
+  config: configs/model/qwen2_vl_2b.yaml
+  checkpoint: outputs/sft_baseline/checkpoint-best
+
+data:
+  config: configs/data/screenspot_v2.yaml
+  split: test
+
+metrics:
+  - element_accuracy
+  - point_accuracy
+  - mean_iou
+  - iou@0.5
+  - iou@0.75
+  - action_type_accuracy
+
+output:
+  output_dir: outputs/eval/grounding
+  save_predictions: true
+  save_visualizations: false
+  max_vis_samples: 50

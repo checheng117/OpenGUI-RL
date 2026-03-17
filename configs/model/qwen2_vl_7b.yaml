@@ -1,0 +1,24 @@
+model:
+  name: qwen2_vl_7b
+  backbone: Qwen/Qwen2-VL-7B-Instruct
+  type: vlm
+
+  device_map: auto
+  torch_dtype: bfloat16
+  load_in_4bit: true
+  load_in_8bit: false
+
+  max_new_tokens: 256
+  temperature: 0.0
+  top_p: 1.0
+
+  output_format: text
+
+  use_lora: true
+  lora:
+    r: 8
+    alpha: 16
+    dropout: 0.05
+    target_modules:
+      - q_proj
+      - v_proj

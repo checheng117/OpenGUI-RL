@@ -1,0 +1,28 @@
+model:
+  name: qwen2_vl_2b
+  backbone: Qwen/Qwen2-VL-2B-Instruct
+  type: vlm
+
+  # Loading settings
+  device_map: auto
+  torch_dtype: bfloat16
+  load_in_4bit: false
+  load_in_8bit: false
+
+  # Generation settings
+  max_new_tokens: 256
+  temperature: 0.0
+  top_p: 1.0
+
+  # Grounding output format
+  output_format: text  # "text" (parse from generation) or "head" (regression head)
+
+  # PEFT / LoRA (for fine-tuning)
+  use_lora: true
+  lora:
+    r: 16
+    alpha: 32
+    dropout: 0.05
+    target_modules:
+      - q_proj
+      - v_proj

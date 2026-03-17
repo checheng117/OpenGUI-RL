@@ -1,0 +1,35 @@
+# Stage C option 1: Pairwise preference optimization (DPO-style)
+experiment:
+  name: pairwise_preference
+  stage: C
+  description: DPO-style preference optimization from verifiable reward pairs
+
+model:
+  config: configs/model/qwen2_vl_2b.yaml
+  sft_checkpoint: outputs/sft_baseline/checkpoint-best
+
+preference:
+  construction: reward_based  # construct pairs from verifiable reward comparison
+  min_reward_gap: 0.2  # minimum reward difference for pair
+  max_pairs_per_sample: 4
+
+data:
+  train:
+    config: configs/data/mind2web.yaml
+    split: train
+  eval:
+    config: configs/data/mind2web.yaml
+    split: test_task
+
+training:
+  output_dir: outputs/pairwise
+  num_epochs: 1
+  batch_size: 4
+  learning_rate: 5.0e-6
+  beta: 0.1  # DPO temperature
+  seed: 42
+
+wandb:
+  enabled: false
+  project: gui-grounding
+  run_name: pairwise-dpo

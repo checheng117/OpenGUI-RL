@@ -1,0 +1,18 @@
+dataset:
+  name: screenspot_pro
+  role: optional_hard_eval
+  data_dir: data/raw/screenspot_pro
+  splits:
+    - test
+  eval_split: test
+
+  description: >
+    Professional high-resolution GUI grounding benchmark.
+    Used as a stress test for dense / professional interfaces.
+
+  image_dir: images
+  annotation_format: jsonl
+
+  max_image_size: 2048  # higher res for pro benchmark
+
+  # TODO(stage-2): integrate if compute and time permit
