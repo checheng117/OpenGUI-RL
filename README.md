@@ -224,8 +224,12 @@ Key writeups:
 
 ### In Progress / Not Yet Implemented
 
-- [ ] Formal top-k candidate generation built around the new point-primary action object
-- [ ] Lightweight verifier / reward scorer for candidate selection
+- [~] Formal top-k candidate generation built around the new point-primary action object
+  - Implemented top-k export + diversity/gating utilities: `scripts/run_generate_candidates.py`
+  - Still missing a fully unified point-primary action-object candidate API (see scaffold TODOs): `src/gui_grounding/reward/candidate_generator.py`
+- [x] Lightweight verifier / reward scorer for candidate selection
+  - Dual-path candidate builder + scoring: `src/gui_grounding/reward/lightweight_verifier.py`
+  - End-to-end evaluation script (ScreenSpot-v2): `scripts/run_eval_dual_path_verifier.py`
 - [ ] Coarse-to-fine local crop refinement for small targets and dense interfaces
 - [ ] Text-target vs icon-target specialized decoding / refinement logic
 - [ ] Preference optimization or larger training loops on top of a stronger candidate-and-verifier pipeline
