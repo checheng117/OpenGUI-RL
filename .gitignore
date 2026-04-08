@@ -11,6 +11,7 @@ build/
 
 # Virtual / conda environments
 .venv/
+.venv-py310/
 venv/
 env/
 ENV/

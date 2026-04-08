@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
+import os
 import sys
 from collections import Counter
 from pathlib import Path
@@ -188,5 +190,15 @@ def main() -> None:
     logger.info("Done.")
 
 
+def _exit_cleanly(exit_code: int = 0) -> "NoReturn":
+    """Legacy workaround for Python 3.13 finalization crashes."""
+    logging.shutdown()
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(exit_code)
+
+
 if __name__ == "__main__":
     main()
+    if os.getenv("GUI_GROUNDING_LEGACY_HARD_EXIT", "0") == "1":
+        _exit_cleanly(0)

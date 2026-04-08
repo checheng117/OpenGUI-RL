@@ -1,0 +1,30 @@
+evaluation:
+  name: screenspot_v2_qwen2_5_vl_3b_model_resized_full
+  description: Full ScreenSpot-v2 held-out evaluation with Qwen-first model-resized coordinate refinement.
+
+dataset:
+  hf_dataset_id: lscpku/ScreenSpot-v2
+  split: test
+  max_samples: null
+  start_index: 0
+  end_index: null
+  indices_json: null
+
+model:
+  backbone: qwen2_5_vl_3b
+  device: cuda
+  torch_dtype: bfloat16
+  attn_implementation: sdpa
+  gpu_memory_utilization: 0.7
+  max_new_tokens: 256
+  temperature: 0.2
+  min_pixels: 65536
+  max_pixels: 524288
+  coordinate_frame: model_resized
+
+output:
+  output_dir: outputs/screenspot_v2_eval_qwen2_5_vl_3b_model_resized
+
+runtime:
+  seed: 42
+  log_every: 50

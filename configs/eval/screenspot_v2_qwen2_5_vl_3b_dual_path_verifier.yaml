@@ -1,0 +1,35 @@
+evaluation:
+  name: screenspot_v2_qwen2_5_vl_3b_dual_path_verifier
+  description: Dual-path candidate generation with a lightweight verifier over point-native and structured Qwen outputs.
+
+inputs:
+  point_native_predictions: outputs/screenspot_v2_eval_qwen2_5_vl_3b_point_native_decoupled/predictions.jsonl
+  structured_predictions: outputs/screenspot_v2_eval_qwen2_5_vl_3b_model_resized/predictions.jsonl
+  point_native_summary: outputs/screenspot_v2_eval_qwen2_5_vl_3b_point_native_decoupled/evaluation_summary.json
+  point_native_subgroups: outputs/screenspot_v2_eval_qwen2_5_vl_3b_point_native_decoupled/subgroup_metrics.json
+  structured_summary: outputs/screenspot_v2_eval_qwen2_5_vl_3b_model_resized/evaluation_summary.json
+  structured_subgroups: outputs/screenspot_v2_eval_qwen2_5_vl_3b_model_resized/subgroup_metrics.json
+  public_baseline_summary: outputs/screenspot_v2_public_qwen2_5_vl_3b_point_baseline/evaluation_summary.json
+  public_baseline_subgroups: outputs/screenspot_v2_public_qwen2_5_vl_3b_point_baseline/subgroup_metrics.json
+
+verifier:
+  structured_override_confidence_min: 0.95
+  structured_override_min_click_disagreement_px: 20.0
+  source_prior_point_native: 0.25
+  source_prior_structured: 0.10
+  source_prior_hybrid: 0.85
+  format_bonus: 0.60
+  action_valid_bonus: 0.25
+  click_inside_own_bbox_bonus: 0.40
+  other_bbox_support_bonus: 0.35
+  confidence_bonus_weight: 0.20
+  hybrid_supported_by_structured_bonus: 0.20
+  structured_override_bonus: 1.50
+  hybrid_override_penalty: 1.20
+  point_candidate_penalty: 0.15
+
+output:
+  output_dir: outputs/screenspot_v2_eval_qwen2_5_vl_3b_dual_path_verifier
+
+runtime:
+  log_every: 100

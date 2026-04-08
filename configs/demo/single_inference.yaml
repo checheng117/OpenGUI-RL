@@ -1,0 +1,24 @@
+data:
+  split: train
+  max_samples: 8
+  sample_index: 0
+  cache_screenshots: true
+
+model:
+  backend: qwen2_5_vl_3b  # qwen2_5_vl_3b | qwen3_vl_2b | clip_grid_legacy
+  backbone: qwen2_5_vl_3b
+  device: auto
+  torch_dtype: auto
+  attn_implementation: sdpa
+  gpu_memory_utilization: 0.9
+  max_new_tokens: 256
+  temperature: 0.0
+  grid_cols: 6
+  grid_rows: 4
+
+output:
+  output_dir: outputs/single_inference
+
+runtime:
+  seed: 42
+  legacy_hard_exit_on_success: false

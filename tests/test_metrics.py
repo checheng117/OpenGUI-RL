@@ -15,6 +15,7 @@ from gui_grounding.evaluation.metrics import (
     compute_all_metrics,
     element_accuracy,
     iou_at_threshold,
+    mean_normalized_click_l1,
     mean_iou,
     point_accuracy,
     reranked_gain,
@@ -84,6 +85,24 @@ class TestActionTypeAccuracy:
 
     def test_case_insensitive(self):
         assert action_type_accuracy(["Click"], ["click"]) == pytest.approx(1.0)
+
+
+class TestMeanNormalizedClickL1:
+    def test_zero_when_exact(self):
+        err = mean_normalized_click_l1(
+            pred_points=[(50, 25)],
+            gt_points=[(50, 25)],
+            image_sizes=[(100, 50)],
+        )
+        assert err == pytest.approx(0.0)
+
+    def test_normalizes_by_image_size(self):
+        err = mean_normalized_click_l1(
+            pred_points=[(75, 50)],
+            gt_points=[(50, 25)],
+            image_sizes=[(100, 50)],
+        )
+        assert err == pytest.approx(0.375)
 
 
 class TestRerankingMetrics:

@@ -1,0 +1,36 @@
+experiment:
+  name: sft_qwen3_vl_2b_stagea
+  stage: A
+  description: Secondary compatibility Stage-A path with Qwen3-VL-2B-Instruct
+
+model:
+  backend: qwen3_vl_2b
+  backbone: qwen3_vl_2b
+  torch_dtype: auto
+  attn_implementation: sdpa
+  gpu_memory_utilization: 0.9
+
+data:
+  split_mode: single_split_holdout
+  val_ratio: 0.1
+  train:
+    split: train
+    max_samples: 32
+    cache_screenshots: true
+  eval:
+    split: train
+    max_samples: 32
+    cache_screenshots: true
+
+training:
+  output_dir: outputs/sft_qwen3_vl_2b_stagea
+  max_steps: 1
+  batch_size: 1
+  learning_rate: 1.0e-5
+  seed: 42
+  device: auto
+
+wandb:
+  enabled: false
+  project: gui-grounding
+  run_name: sft-qwen3-vl-2b-stagea

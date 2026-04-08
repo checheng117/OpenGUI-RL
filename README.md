@@ -149,6 +149,53 @@ python scripts/run_demo.py --config configs/demo/demo.yaml
 # Opens at http://localhost:7860
 ```
 
+## Current Progress and Results
+
+This repository is no longer just a scaffold. The Qwen-first evaluation path is live, and the main comparable ScreenSpot-v2 metric is now tracked under one consistent repo protocol.
+
+### What Has Been Achieved
+
+- Integrated a real Qwen-first inference path for GUI grounding.
+- Built a clean ScreenSpot-v2 evaluation runner with canonical `bbox_proposal` / `click_point` / `action_type` outputs.
+- Reproduced a plain public `Qwen/Qwen2.5-VL-3B-Instruct` same-protocol baseline inside this repo.
+- Fixed the major coordinate-frame mismatch that had previously dominated underperformance.
+- Iterated from bbox-heavier structured decoding to point-first decoding, then to a blueprint-aligned point-native decoupled decode path.
+- Preserved structured outputs while improving the main comparable metric, `point_accuracy`.
+
+### Same-Protocol ScreenSpot-v2 Snapshot
+
+| Method | Point Acc | Desktop | Web | Mobile | IoU@0.5 | Mean IoU | Action Valid | Parseable |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Reproduced public Qwen baseline | 0.7563 | 0.7275 | 0.7346 | 0.7944 | 0.0519 | 0.1327 | 0.2980 | 0.9937 |
+| Structured refined method | 0.7099 | 0.6976 | 0.6796 | 0.7445 | 0.1682 | 0.2404 | 1.0000 | 1.0000 |
+| Best prior point-first refinement | 0.7296 | 0.7305 | 0.6751 | 0.7764 | 0.1635 | 0.2365 | 1.0000 | 1.0000 |
+| Later web/mobile hotspot prompt tweak | 0.7264 | 0.7305 | 0.6796 | 0.7645 | 0.1588 | 0.2286 | 0.9992 | 0.9992 |
+| **Point-native decoupled structured path** | **0.7736** | **0.7365** | **0.7620** | **0.8084** | **0.0967** | **0.1912** | **1.0000** | **1.0000** |
+
+### Current Best Method
+
+The current best same-protocol result is the blueprint-aligned point-native decoupled path:
+
+- `click_point` is predicted first in a point-native Qwen pass
+- `bbox_proposal` and `action_type` are attached in a secondary structured pass
+- the output contract remains compatible with later candidate export and reward-based scoring
+- same-protocol result is now above the reproduced public plain-Qwen baseline on the main comparable metric
+
+Latest best-run artifacts:
+
+- `outputs/screenspot_v2_eval_qwen2_5_vl_3b_point_native_decoupled/evaluation_summary.json`
+- `outputs/screenspot_v2_eval_qwen2_5_vl_3b_point_native_decoupled/subgroup_metrics.json`
+- `outputs/screenspot_v2_eval_qwen2_5_vl_3b_point_native_decoupled/comparison_vs_previous_structured.md`
+- `outputs/screenspot_v2_eval_qwen2_5_vl_3b_point_native_decoupled/comparison_vs_point_first.md`
+- `outputs/screenspot_v2_eval_qwen2_5_vl_3b_point_native_decoupled/comparison_vs_public_baseline.md`
+
+Key writeups:
+
+- [`docs/public_baseline_reproduction_and_same_protocol_comparison.md`](docs/public_baseline_reproduction_and_same_protocol_comparison.md)
+- [`docs/point_accuracy_first_refinement_against_public_qwen.md`](docs/point_accuracy_first_refinement_against_public_qwen.md)
+- [`docs/web_mobile_same_protocol_refinement_round.md`](docs/web_mobile_same_protocol_refinement_round.md)
+- [`docs/blueprint_realignment_point_native_decoupling.md`](docs/blueprint_realignment_point_native_decoupling.md)
+
 ## Current Development Stage
 
 ### Completed
@@ -168,27 +215,73 @@ python scripts/run_demo.py --config configs/demo/demo.yaml
 - [x] Unit tests for reward, metrics, config, data schemas, and Mind2Web adapter
 - [x] Error analysis utilities
 - [x] Comprehensive documentation
+- [x] Real Qwen backbone integration for single-step GUI grounding
+- [x] Clean ScreenSpot-v2 held-out evaluation under one repo protocol
+- [x] Same-protocol reproduction of the plain public Qwen baseline
+- [x] Coordinate-frame repair and same-protocol comparison reporting
+- [x] Blueprint-aligned point-native decoupled decode path with structured outputs retained
+- [x] Full ScreenSpot-v2 re-evaluation for the new point-native decoupled method
 
-### Not Yet Implemented
+### In Progress / Not Yet Implemented
 
-- [ ] Real model loading and inference (Qwen2-VL integration)
-- [ ] SFT training loop with real data
-- [ ] Model-based candidate generation
-- [ ] Learned reranker training
-- [ ] DPO / GRPO training with real reward signals
-- [ ] Full benchmark evaluation on all splits
-- [ ] ScreenSpot-v2 / VisualWebBench adapter with real data
+- [ ] Formal top-k candidate generation built around the new point-primary action object
+- [ ] Lightweight verifier / reward scorer for candidate selection
+- [ ] Coarse-to-fine local crop refinement for small targets and dense interfaces
+- [ ] Text-target vs icon-target specialized decoding / refinement logic
+- [ ] Preference optimization or larger training loops on top of a stronger candidate-and-verifier pipeline
+- [ ] Broader transfer evaluation on additional benchmarks after the method stack stabilizes
 
-## Future Plan
+## Near-Term Technical Roadmap
 
-| Stage | Task | Status |
-|-------|------|--------|
-| **A** | Supervised fine-tuning on Mind2Web | Scaffold ready |
-| **B** | Candidate generation + reward reranking | Scaffold ready |
-| **C-1** | Pairwise preference optimization (DPO) | Scaffold ready |
-| **C-2** | Lightweight GRPO / contextual bandit | Scaffold ready |
-| **Eval** | Cross-website/domain generalization study | Scaffold ready |
-| **Demo** | Qualitative demo with real model | Scaffold ready |
+The next goal is **method improvement**, not more bug recovery and not another round of tiny prompt wording changes.
+
+### Near-Term Priorities
+
+1. **Formalize the dual-path decode design**
+   - Treat the point-native path as the primary click predictor.
+   - Treat the bbox/action path as supporting structure.
+   - Export candidates with `click_point_primary`, `bbox_support`, `action_type`, confidence, and provenance-style metadata.
+
+2. **Build top-k candidates + a lightweight verifier**
+   - Let the main model propose multiple candidates.
+   - Use a reward-aligned verifier or scorer to choose top-1.
+   - This matches the original Stage B direction more closely than immediately retraining a larger backbone.
+
+3. **Add coarse-to-fine local refinement**
+   - Use the first-stage point to crop or zoom into a local region.
+   - Refine small targets, icon-only targets, dense layouts, and bbox quality without pulling the primary click back into bbox-first coupling.
+
+4. **Split text and icon handling more explicitly**
+   - Use separate lightweight logic for text targets vs icon/widget targets.
+   - Keep this as a method-level distinction rather than another single shared prompt tweak.
+
+5. **Only then move to heavier training**
+   - Revisit reranker training, preference optimization, or other larger optimization stages after the candidate-and-verifier path is strong enough.
+
+### What Is De-Prioritized For Now
+
+- More pure prompt micro-tuning as the main strategy
+- Jumping straight into large retraining before the candidate/verifier path is in place
+- Going back to a heavy RL shell before reward-based candidate selection is stable
+
+## Method Status Summary
+
+The project has already moved through three distinct phases:
+
+1. **Error recovery**
+   - repairing coordinate mismatch and rebuilding a fair same-protocol baseline
+2. **Decode realignment**
+   - moving from bbox-heavier structured decoding toward point-first behavior
+3. **Blueprint-aligned method improvement**
+   - promoting click point to the primary prediction object while retaining structured outputs
+
+The next stage should therefore focus on:
+
+- candidate-layer improvements
+- verifier / reward-based selection
+- localized refinement
+
+rather than more bug-fix-style gains.
 
 ## Datasets
 
@@ -201,9 +294,15 @@ python scripts/run_demo.py --config configs/demo/demo.yaml
 
 See [`docs/dataset_notes.md`](docs/dataset_notes.md) for detailed dataset documentation.
 
-## Disclaimer
+## Status Note
 
-This repository is a **scaffold and starter implementation** for a course project. It provides a complete engineering skeleton with functional reward computation, evaluation metrics, and runnable entry points in scaffold mode. **It does not contain trained models, benchmark results, or claims of experimental performance.** All experiment result placeholders in the documentation are explicitly marked as templates to be filled after real experiments are conducted.
+This repository now contains real same-protocol evaluation artifacts and documented benchmark results for the Qwen-first grounding path. The current strongest result in this repo is the point-native decoupled structured method on ScreenSpot-v2.
+
+What remains unfinished is not the basic evaluation pipeline, but the next layer of method work:
+
+- candidate generation around the point-primary action object
+- verifier / reward-based selection
+- stronger secondary localization quality
 
 ## License
 

@@ -1,0 +1,36 @@
+experiment:
+  name: sft_qwen2_5_vl_3b_stagea
+  stage: A
+  description: Qwen2.5-VL-3B-Instruct primary Stage-A realigned path
+
+model:
+  backend: qwen2_5_vl_3b
+  backbone: qwen2_5_vl_3b
+  torch_dtype: auto
+  attn_implementation: sdpa
+  gpu_memory_utilization: 0.9
+
+data:
+  split_mode: single_split_holdout
+  val_ratio: 0.1
+  train:
+    split: train
+    max_samples: 32
+    cache_screenshots: true
+  eval:
+    split: train
+    max_samples: 32
+    cache_screenshots: true
+
+training:
+  output_dir: outputs/sft_qwen2_5_vl_3b_stagea
+  max_steps: 1
+  batch_size: 1
+  learning_rate: 1.0e-5
+  seed: 42
+  device: auto
+
+wandb:
+  enabled: false
+  project: gui-grounding
+  run_name: sft-qwen2-5-vl-3b-stagea

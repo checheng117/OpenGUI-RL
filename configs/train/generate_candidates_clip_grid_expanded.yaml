@@ -1,0 +1,46 @@
+experiment:
+  name: candidate_generation_clip_grid_stage5_5_expanded
+  stage: B
+  description: Expanded CLIP-grid model-based candidate pool with diversity-aware selection
+
+model:
+  backend: clip_grid_stagea
+  backbone: openai/clip-vit-base-patch32
+  checkpoint: outputs/sft_clip_grid_debug_rerun/checkpoint-best
+  grid_rows: 4
+  grid_cols: 6
+  hidden_dim: 256
+  dropout: 0.1
+  freeze_backbone: true
+  device: auto
+
+candidate_generation:
+  backend: clip_grid_stagea
+  top_k: 12
+  top_action_k: 4
+  top_grid_k: 24
+  selection_strategy: diverse
+  max_per_action: 4
+
+reward:
+  weights:
+    element_correct: 1.0
+    iou: 0.5
+    click_inside_target: 0.3
+    action_type_correct: 0.2
+    invalid_format_penalty: 0.5
+
+data:
+  train:
+    split: train
+    max_samples: 120
+    cache_screenshots: true
+
+output:
+  output_dir: outputs/candidate_generation_clip_grid_expanded
+  candidates_jsonl: candidates_train_expanded.jsonl
+  flat_candidates_jsonl: candidates_train_expanded_flat.jsonl
+  summary_json: summary_train_expanded.json
+
+training:
+  seed: 42

@@ -1,0 +1,36 @@
+evaluation:
+  name: screenspot_v2_qwen2_5_vl_3b_point_native_decoupled
+  description: Blueprint-aligned ScreenSpot-v2 evaluation with point-native primary decoding and secondary structured bbox/action support.
+
+dataset:
+  hf_dataset_id: lscpku/ScreenSpot-v2
+  split: test
+  max_samples: null
+  start_index: 0
+  end_index: null
+  indices_json: null
+
+model:
+  backbone: qwen2_5_vl_3b
+  adapter: qwen_structured_json
+  device: cuda
+  torch_dtype: bfloat16
+  attn_implementation: sdpa
+  gpu_memory_utilization: 0.7
+  max_new_tokens: 192
+  temperature: 0.0
+  min_pixels: 65536
+  max_pixels: 524288
+  coordinate_frame: model_resized
+  decoupled_point_native_decode: true
+  point_first_prompt: false
+  web_mobile_hotspot_prompt: false
+  edge_click_interior_threshold: 0.0
+  edge_click_interior_position: 0.45
+
+output:
+  output_dir: outputs/screenspot_v2_eval_qwen2_5_vl_3b_point_native_decoupled
+
+runtime:
+  seed: 42
+  log_every: 50

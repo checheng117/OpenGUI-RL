@@ -94,6 +94,24 @@ def action_type_accuracy(
     return correct / len(pred_actions)
 
 
+def mean_normalized_click_l1(
+    pred_points: list[Optional[tuple[float, float]]],
+    gt_points: list[Optional[tuple[float, float]]],
+    image_sizes: list[Optional[tuple[int, int]]],
+) -> float:
+    """Mean L1 click error after normalizing x/y by image width/height."""
+    errors: list[float] = []
+    for pred, gt, image_size in zip(pred_points, gt_points, image_sizes):
+        if pred is None or gt is None or image_size is None:
+            continue
+        width = max(float(image_size[0]), 1.0)
+        height = max(float(image_size[1]), 1.0)
+        errors.append(
+            (abs(float(pred[0]) - float(gt[0])) / width + abs(float(pred[1]) - float(gt[1])) / height) / 2.0
+        )
+    return sum(errors) / max(len(errors), 1)
+
+
 # -----------------------------------------------------------------------
 # Reranking-specific metrics
 # -----------------------------------------------------------------------

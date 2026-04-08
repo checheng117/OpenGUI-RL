@@ -1,0 +1,37 @@
+experiment:
+  name: mind2web_stageB_reranker_qwen_source_gated_posthoc_calibrated
+  stage: B.5
+  description: Lightweight calibrated reranker over post-hoc source-gated Mind2Web Stage-B pools.
+
+data:
+  candidates_path: outputs/mind2web_stageB_candidates_source_gated_posthoc/train/candidates_train.jsonl
+
+reranker_model:
+  input_dim: 96
+  hidden_dim: 128
+  dropout: 0.1
+
+training:
+  output_dir: outputs/mind2web_stageB_reranker_source_gated_posthoc_calibrated
+  num_epochs: 20
+  batch_size: 64
+  learning_rate: 5.0e-4
+  weight_decay: 1.0e-4
+  margin: 0.0
+  val_ratio: 0.2
+  min_reward_diff: 1.0e-6
+  num_workers: 0
+  device: cpu
+  seed: 42
+  export_preference_pairs: true
+  pair_construction_mode: headroom_hard_negative
+  pair_weight_mode: reward_gap
+  pair_reward_gap_threshold: 0.01
+  pair_weight_alpha: 3.0
+  pair_weight_cap: 5.0
+
+evaluation:
+  candidate_paths:
+    test_task: outputs/mind2web_stageB_candidates_source_gated_posthoc/test_task/candidates_test_task.jsonl
+    test_website: outputs/mind2web_stageB_candidates_source_gated_posthoc/test_website/candidates_test_website.jsonl
+    test_domain: outputs/mind2web_stageB_candidates_source_gated_posthoc/test_domain/candidates_test_domain.jsonl

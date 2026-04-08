@@ -1,0 +1,34 @@
+evaluation:
+  name: screenspot_v2_qwen2_5_vl_3b_point_accuracy_first
+  description: Minimal point-first structured Qwen refinement on ScreenSpot-v2 under the same repo protocol.
+
+dataset:
+  hf_dataset_id: lscpku/ScreenSpot-v2
+  split: test
+  max_samples: null
+  start_index: 0
+  end_index: null
+  indices_json: null
+
+model:
+  backbone: qwen2_5_vl_3b
+  adapter: qwen_structured_json
+  device: cuda
+  torch_dtype: bfloat16
+  attn_implementation: sdpa
+  gpu_memory_utilization: 0.7
+  max_new_tokens: 256
+  temperature: 0.0
+  min_pixels: 65536
+  max_pixels: 524288
+  coordinate_frame: model_resized
+  point_first_prompt: true
+  edge_click_interior_threshold: 0.2
+  edge_click_interior_position: 0.45
+
+output:
+  output_dir: outputs/screenspot_v2_eval_qwen2_5_vl_3b_point_accuracy_first
+
+runtime:
+  seed: 42
+  log_every: 50

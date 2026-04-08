@@ -1,0 +1,49 @@
+experiment:
+  name: sft_clip_grid_debug
+  stage: A
+  description: Debug smoke run for Stage-A CLIP-grid SFT
+
+model:
+  backend: clip_grid
+  backbone: openai/clip-vit-base-patch32
+  grid_rows: 4
+  grid_cols: 6
+  hidden_dim: 256
+  dropout: 0.1
+  freeze_backbone: true
+
+data:
+  split_mode: single_split_holdout
+  val_ratio: 0.2
+  train:
+    split: train
+    max_samples: 80
+    cache_screenshots: true
+  eval:
+    split: train
+    max_samples: 80
+    cache_screenshots: true
+
+training:
+  output_dir: outputs/sft_clip_grid_debug
+  num_epochs: 1
+  batch_size: 8
+  gradient_accumulation_steps: 1
+  learning_rate: 5.0e-4
+  weight_decay: 0.01
+  warmup_ratio: 0.05
+  max_grad_norm: 1.0
+  save_steps: 5
+  eval_steps: 5
+  logging_steps: 1
+  seed: 42
+  num_workers: 0
+  device: auto
+  loss_weights:
+    action: 1.0
+    grid: 1.0
+
+wandb:
+  enabled: true
+  project: gui-grounding
+  run_name: sft-clip-grid-debug

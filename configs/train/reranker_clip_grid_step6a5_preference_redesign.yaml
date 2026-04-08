@@ -1,0 +1,42 @@
+experiment:
+  name: reranker_clip_grid_step6a5_preference_redesign
+  stage: C
+  description: Headroom-focused hard-negative and gap-weighted preference redesign
+
+data:
+  candidates_path: outputs/candidate_generation_clip_grid_expanded/candidates_train_expanded.jsonl
+
+reranker_model:
+  input_dim: 36
+  hidden_dim: 128
+  dropout: 0.1
+
+training:
+  output_dir: outputs/reranker_clip_grid_step6a5_preference_redesign
+  optimization_mode: dpo_style
+  dpo_beta: 0.2
+  policy_init_checkpoint: outputs/reranker_clip_grid_expanded_feature_upgrade/checkpoint-best/model.pt
+  reference_checkpoint: outputs/reranker_clip_grid_expanded_feature_upgrade/checkpoint-best/model.pt
+  step5c_baseline_summary_path: outputs/reranker_clip_grid_expanded_feature_upgrade/evaluation_summary.json
+  step6a_baseline_summary_path: outputs/reranker_clip_grid_step6a_dpo_style/evaluation_summary.json
+  export_preference_pairs: true
+
+  # Step 6A.5 targeted redesign:
+  # 1) only train on pools with actual headroom and pairs that correct baseline(first-choice) mistakes
+  # 2) drop tiny reward-gap pairs and weight stronger gaps higher
+  pair_construction_mode: headroom_hard_negative
+  pair_weight_mode: reward_gap
+  pair_reward_gap_threshold: 0.01
+  pair_weight_alpha: 4.0
+  pair_weight_cap: 6.0
+
+  num_epochs: 30
+  batch_size: 128
+  learning_rate: 5.0e-4
+  weight_decay: 0.0
+  margin: 0.0
+  val_ratio: 0.25
+  min_reward_diff: 1.0e-4
+  num_workers: 0
+  device: auto
+  seed: 42

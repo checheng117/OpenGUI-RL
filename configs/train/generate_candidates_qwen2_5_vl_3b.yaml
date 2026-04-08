@@ -1,0 +1,43 @@
+experiment:
+  name: candidate_generation_qwen2_5_vl_3b
+  stage: B
+  description: Qwen2.5-VL candidate export with bbox/click/action semantics
+
+model:
+  backend: qwen_vl
+  backbone: qwen2_5_vl_3b
+  device: auto
+  torch_dtype: auto
+  attn_implementation: sdpa
+  gpu_memory_utilization: 0.9
+  max_new_tokens: 256
+  temperature: 0.35
+
+candidate_generation:
+  backend: qwen_vl
+  top_k: 4
+  top_action_k: 4
+  top_grid_k: 8
+
+reward:
+  weights:
+    element_correct: 1.0
+    iou: 0.5
+    click_inside_target: 0.3
+    action_type_correct: 0.2
+    invalid_format_penalty: 0.5
+
+data:
+  train:
+    split: train
+    max_samples: 10
+    cache_screenshots: true
+
+output:
+  output_dir: outputs/candidate_generation_qwen2_5_vl_3b
+  candidates_jsonl: candidates_train.jsonl
+  flat_candidates_jsonl: candidates_train_flat.jsonl
+  summary_json: summary_train.json
+
+training:
+  seed: 42

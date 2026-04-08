@@ -1,0 +1,55 @@
+experiment:
+  name: candidate_generation_qwen2_5_vl_3b_safe_baseline_locked
+  stage: B
+  description: Locked safe baseline for Qwen regression on RTX 3090
+
+model:
+  backend: qwen_vl
+  backbone: qwen2_5_vl_3b
+  device: cuda
+  torch_dtype: float16
+  attn_implementation: eager
+  gpu_memory_utilization: 0.7
+  max_new_tokens: 96
+  temperature: 0.2
+  min_pixels: 65536
+  max_pixels: 524288
+
+candidate_generation:
+  backend: qwen_vl
+  top_k: 2
+  top_action_k: 2
+  top_grid_k: 4
+  safe_run:
+    enabled: true
+    force_serial_qwen: true
+    incremental_save: true
+    clear_cuda_cache_on_error: true
+    log_cuda_memory_per_sample: true
+    log_qwen_generate_diagnostics: true
+    cuda_launch_blocking: false
+
+reward:
+  weights:
+    element_correct: 1.0
+    iou: 0.5
+    click_inside_target: 0.3
+    action_type_correct: 0.2
+    invalid_format_penalty: 0.5
+
+data:
+  train:
+    split: train
+    max_samples: 6
+    cache_screenshots: true
+
+output:
+  output_dir: outputs/qwen_safe_regression/run_artifacts/baseline_locked
+  candidates_jsonl: candidates_train.jsonl
+  flat_candidates_jsonl: candidates_train_flat.jsonl
+  summary_json: summary_train.json
+  failure_json: failures_train.json
+  runtime_json: runtime_train.json
+
+training:
+  seed: 42

@@ -31,6 +31,8 @@ Deng et al., "Mind2Web: Towards a Generalist Agent for the Web", NeurIPS 2023.
 from __future__ import annotations
 
 import json
+import os
+from io import BytesIO
 from pathlib import Path
 from typing import Optional
 
@@ -141,6 +143,58 @@ def _parse_operation(op_str: str) -> tuple[Optional[ActionType], str]:
     return action_type, value
 
 
+def _bootstrap_hf_environment() -> Optional[str]:
+    """Load local HF settings and return the best available token."""
+    try:
+        from dotenv import load_dotenv
+        from gui_grounding.constants import PROJECT_ROOT
+
+        load_dotenv(PROJECT_ROOT / ".env", override=False)
+    except ImportError:
+        pass
+
+    os.environ.setdefault("HF_HUB_DOWNLOAD_TIMEOUT", "120")
+    os.environ.setdefault("HF_HUB_ETAG_TIMEOUT", "60")
+
+    token = os.getenv("HF_TOKEN") or os.getenv("HUGGINGFACE_HUB_TOKEN")
+    if token:
+        return token
+
+    try:
+        from huggingface_hub import get_token
+
+        token = get_token()
+    except ImportError:
+        token = None
+
+    if token:
+        # Make the cached token visible to downstream HF calls that read env vars.
+        os.environ.setdefault("HF_TOKEN", token)
+    return token
+
+
+def _normalize_screenshot(image: Optional[Image.Image | dict]) -> Optional[Image.Image]:
+    """Detach the screenshot from any lazy file handle and normalize to RGB."""
+    if image is None:
+        return None
+
+    if isinstance(image, dict):
+        image_bytes = image.get("bytes")
+        if isinstance(image_bytes, (bytes, bytearray)):
+            with Image.open(BytesIO(image_bytes)) as pil_image:
+                return pil_image.convert("RGB")
+        return None
+
+    image.load()
+    normalized = image.convert("RGB")
+
+    close = getattr(image, "close", None)
+    if callable(close):
+        close()
+
+    return normalized
+
+
 # -----------------------------------------------------------------------
 # Public dataset class
 # -----------------------------------------------------------------------
@@ -200,6 +254,49 @@ class Mind2WebDataset:
     # -------------------------------------------------------------------
 
     def _load(self) -> None:
+        token = _bootstrap_hf_environment()
+        if self.cache_screenshots:
+            self.screenshot_dir.mkdir(parents=True, exist_ok=True)
+
+        local_parquets = self._resolve_local_parquet_files(token=token)
+        if local_parquets:
+            self._load_from_local_parquets(local_parquets)
+            return
+
+        self._load_from_hf_streaming(token=token)
+
+    def _resolve_local_parquet_files(self, token: Optional[str]) -> list[Path]:
+        if self.split != "train":
+            return []
+        try:
+            from huggingface_hub import snapshot_download
+        except ImportError:
+            return []
+
+        try:
+            snapshot_dir = Path(
+                snapshot_download(
+                    repo_id=HF_DATASET_ID,
+                    repo_type="dataset",
+                    token=token,
+                    local_files_only=True,
+                )
+            )
+        except Exception:
+            return []
+
+        data_dir = snapshot_dir / "data"
+        files = sorted(data_dir.glob(f"{self.split}-*.parquet"))
+        if not files:
+            return []
+        logger.info(
+            "Using local Mind2Web parquet cache for split='%s' (%d shard files).",
+            self.split,
+            len(files),
+        )
+        return files
+
+    def _load_from_hf_streaming(self, token: Optional[str]) -> None:
         """Load from HuggingFace datasets with streaming."""
         try:
             from datasets import load_dataset
@@ -208,36 +305,94 @@ class Mind2WebDataset:
             raise
 
         logger.info("Loading Mind2Web split='%s' from HuggingFace (streaming)...", self.split)
-        ds = load_dataset(HF_DATASET_ID, streaming=True)
-
-        if self.split not in ds:
-            raise KeyError(f"Split '{self.split}' not found. Available: {list(ds.keys())}")
-
-        if self.cache_screenshots:
-            self.screenshot_dir.mkdir(parents=True, exist_ok=True)
+        ds = load_dataset(
+            HF_DATASET_ID,
+            split=self.split,
+            streaming=True,
+            token=token,
+        )
 
         count = 0
         skipped = 0
-        for row in ds[self.split]:
-            if self.max_samples is not None and count >= self.max_samples:
-                break
-            try:
-                sample, screenshot = self._row_to_sample(row)
-                self._samples.append(sample)
-                if screenshot is not None:
-                    self._handle_screenshot(sample.sample_id, screenshot)
-                count += 1
-            except Exception as exc:
-                skipped += 1
-                uid = row.get("action_uid", "?")
-                logger.warning("Skipped row action_uid=%s: %s", uid, exc)
-                if skipped > 50:
-                    logger.error("Too many skipped rows (>50). Aborting load.")
+        try:
+            for row in ds:
+                if self.max_samples is not None and count >= self.max_samples:
                     break
+                try:
+                    sample, screenshot = self._row_to_sample(row)
+                    self._samples.append(sample)
+                    if screenshot is not None:
+                        self._handle_screenshot(sample.sample_id, screenshot)
+                    count += 1
+                except Exception as exc:
+                    skipped += 1
+                    uid = row.get("action_uid", "?")
+                    logger.warning("Skipped row action_uid=%s: %s", uid, exc)
+                    if skipped > 50:
+                        logger.error("Too many skipped rows (>50). Aborting load.")
+                        break
+        finally:
+            del ds
 
         logger.info(
             "Mind2Web loaded: %d samples, %d skipped (split=%s)",
             len(self._samples), skipped, self.split,
+        )
+
+    def _load_from_local_parquets(self, parquet_files: list[Path]) -> None:
+        try:
+            import pyarrow.parquet as pq
+        except ImportError as exc:
+            raise ImportError("Local Mind2Web parquet loading requires pyarrow.") from exc
+
+        columns = [
+            "screenshot",
+            "confirmed_task",
+            "operation",
+            "pos_candidates",
+            "neg_candidates",
+            "target_action_reprs",
+            "target_action_index",
+            "action_uid",
+            "annotation_id",
+            "website",
+            "domain",
+            "subdomain",
+        ]
+        count = 0
+        skipped = 0
+        for parquet_path in parquet_files:
+            if self.max_samples is not None and count >= self.max_samples:
+                break
+            logger.info("Reading local Mind2Web shard: %s", parquet_path.name)
+            parquet_file = pq.ParquetFile(parquet_path)
+            for batch in parquet_file.iter_batches(batch_size=16, columns=columns):
+                for row in batch.to_pylist():
+                    if self.max_samples is not None and count >= self.max_samples:
+                        break
+                    try:
+                        sample, screenshot = self._row_to_sample(row)
+                        self._samples.append(sample)
+                        if screenshot is not None:
+                            self._handle_screenshot(sample.sample_id, screenshot)
+                        count += 1
+                    except Exception as exc:
+                        skipped += 1
+                        uid = row.get("action_uid", "?")
+                        logger.warning("Skipped local row action_uid=%s: %s", uid, exc)
+                        if skipped > 50:
+                            logger.error("Too many skipped local rows (>50). Aborting load.")
+                            break
+                if skipped > 50 or (self.max_samples is not None and count >= self.max_samples):
+                    break
+            if skipped > 50:
+                break
+
+        logger.info(
+            "Mind2Web loaded from local parquet cache: %d samples, %d skipped (split=%s)",
+            len(self._samples),
+            skipped,
+            self.split,
         )
 
     def _row_to_sample(self, row: dict) -> tuple[GroundingSample, Optional[Image.Image]]:
@@ -275,7 +430,7 @@ class Mind2WebDataset:
                 dom_candidates.append(cand)
 
         # --- Screenshot ---
-        screenshot: Optional[Image.Image] = row.get("screenshot")
+        screenshot = _normalize_screenshot(row.get("screenshot"))
         img_path = ""
         if screenshot is not None:
             img_path = str(self.screenshot_dir / f"{action_uid}.jpg")

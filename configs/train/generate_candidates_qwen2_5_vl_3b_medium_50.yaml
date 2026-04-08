@@ -1,0 +1,59 @@
+experiment:
+  name: candidate_generation_qwen2_5_vl_3b_medium_50
+  stage: B
+  description: Explicit medium-scale Qwen-first candidate export on 50 real Mind2Web samples
+
+model:
+  backend: qwen_vl
+  backbone: qwen2_5_vl_3b
+  device: cuda
+  torch_dtype: bfloat16
+  attn_implementation: sdpa
+  gpu_memory_utilization: 0.7
+  max_new_tokens: 256
+  temperature: 0.2
+  min_pixels: 65536
+  max_pixels: 524288
+
+candidate_generation:
+  backend: qwen_vl
+  top_k: 4
+  top_action_k: 2
+  top_grid_k: 4
+  selection_strategy: score_only
+  safe_run:
+    enabled: true
+    force_serial_qwen: true
+    incremental_save: true
+    clear_cuda_cache_on_error: true
+    log_cuda_memory_per_sample: true
+    log_qwen_generate_diagnostics: true
+    cuda_launch_blocking: false
+
+reward:
+  weights:
+    element_correct: 1.0
+    iou: 0.5
+    click_inside_target: 0.3
+    action_type_correct: 0.2
+    invalid_format_penalty: 0.5
+
+data:
+  train:
+    split: train
+    max_samples: 50
+    cache_screenshots: true
+
+output:
+  output_dir: outputs/candidate_generation_qwen2_5_vl_3b_medium_50
+  candidates_jsonl: candidates_train_medium50.jsonl
+  flat_candidates_jsonl: candidates_train_medium50_flat.jsonl
+  summary_json: summary_train_medium50.json
+  failure_json: failures_train_medium50.json
+  runtime_json: runtime_train_medium50.json
+  structured_quality_json: structured_quality_summary.json
+  structured_quality_md: structured_quality_summary.md
+  action_histogram_json: action_type_histogram.json
+
+training:
+  seed: 42

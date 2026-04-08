@@ -1,0 +1,71 @@
+experiment:
+  name: mind2web_stageA_qwen2_5_vl_3b_sft_localization_fixed
+  stage: A
+  description: Mind2Web Stage-A Qwen2.5-VL-3B supervised grounding baseline with normalized point-first localization supervision and localization-aware checkpoint selection.
+
+model:
+  backend: qwen2_5_vl_3b
+  backbone: qwen2_5_vl_3b
+  torch_dtype: bfloat16
+  attn_implementation: sdpa
+  gpu_memory_utilization: 0.7
+  min_pixels: 65536
+  max_pixels: 524288
+
+data:
+  split_mode: single_split_holdout
+  val_ratio: 0.125
+  train:
+    split: train
+    load_max_samples: 960
+    max_samples: 640
+    selection_strategy: stratified_by_website
+    cache_screenshots: true
+  eval:
+    split: train
+    max_samples: 640
+    cache_screenshots: true
+
+training:
+  output_dir: outputs/mind2web_stageA_sft_localization_fixed
+  num_epochs: 2
+  max_steps: 224
+  batch_size: 1
+  gradient_accumulation_steps: 4
+  learning_rate: 1.0e-4
+  weight_decay: 0.0
+  warmup_ratio: 0.05
+  max_grad_norm: 1.0
+  logging_steps: 8
+  eval_steps: 28
+  save_steps: 56
+  seed: 42
+  device: cuda
+  num_workers: 0
+  lora_r: 16
+  lora_alpha: 32
+  lora_dropout: 0.05
+  gradient_checkpointing: true
+  target_coordinate_frame: original
+  target_coordinate_format: normalized
+  point_first_target: true
+  supervise_element_id: false
+
+evaluation:
+  enabled: true
+  max_new_tokens: 192
+  temperature: 0.0
+  coordinate_frame: original
+  coordinate_format: normalized
+  point_first_prompt: true
+  web_mobile_hotspot_prompt: false
+  decoupled_point_native_decode: false
+  official_eval_manifests:
+    - outputs/mind2web_stageB_candidates/test_task/candidates_test_task.jsonl
+    - outputs/mind2web_stageB_candidates/test_website/candidates_test_website.jsonl
+    - outputs/mind2web_stageB_candidates/test_domain/candidates_test_domain.jsonl
+
+wandb:
+  enabled: false
+  project: gui-grounding
+  run_name: mind2web-stageA-qwen2-5-vl-3b-sft-localization-fixed

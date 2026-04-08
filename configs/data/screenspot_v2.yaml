@@ -2,6 +2,7 @@ dataset:
   name: screenspot_v2
   role: eval
   data_dir: data/raw/screenspot_v2
+  hf_dataset_id: lscpku/ScreenSpot-v2
   splits:
     - test
   eval_split: test
@@ -12,8 +13,12 @@ dataset:
     - web
 
   image_dir: images
-  annotation_format: jsonl
+  annotation_format: huggingface_dataset
+  bbox_format: xywh_absolute
+  cached_screenshot_dir: data/processed/screenspot_v2_screenshots/test
+  metadata_fields:
+    - split
+    - data_type
+    - data_source
 
   max_image_size: 1344
-
-  # TODO(stage-2): verify exact format from ScreenSpot-v2 release
