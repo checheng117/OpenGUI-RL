@@ -1,322 +1,330 @@
 # Cross-Website GUI Grounding with Verifiable Reward Optimization
 
-A multimodal system that takes a **screenshot** and a **natural-language instruction**, locates the correct **UI element**, predicts the **next action**, and improves decision quality using **verifiable rewards** — without relying on pure supervised learning alone.
+This repository studies instruction-conditioned GUI grounding across websites and interface styles. The core problem is: given a screenshot and a natural-language instruction, predict the correct UI target and action in a form that can support later verification and selection.
 
-> **CSC6129 Reinforcement Learning — Course Project**
+The project focuses on a research question rather than a full browser agent: how far can a strong supervised multimodal grounding baseline go, and when does verifiable reward based reranking still add value once supervision becomes strong?
 
----
+## Current Status / Main Findings / Next Steps
 
-## Motivation
+### Current Status
 
-Recent multimodal agents are increasingly expected to interact with real software interfaces. A practical system must map an instruction like *"click the login button"* to a specific UI element on a screenshot and choose the correct action type. This capability — **GUI grounding** — is the core perception layer behind web agents and computer-use assistants.
+- The primary benchmark story is complete on **ScreenSpot-v2** and **Mind2Web**.
+- The repository now contains a mature **Stage A -> Stage B** pipeline and benchmark evidence for its main scientific claims.
+- The next step is no longer core pipeline redesign. The next step is **supplementary benchmark evaluation**.
 
-This project formulates GUI grounding as a **contextual bandit** problem: the context is the screenshot and instruction, the action is the selected UI element and operation, and the reward is computed from element correctness, click-point inclusion, and bounding-box overlap. The project therefore remains genuinely tied to reinforcement learning rather than being a generic VLM fine-tuning exercise.
+### Main Findings
 
-## Scope
+1. **Hybrid OCR/DOM candidate augmentation is critical for a strong supervised GUI grounding baseline.**
+   Pure screenshot-only Stage A was weak on Mind2Web. Adding screenshot plus OCR/DOM-style candidate anchors produced the first credible strong supervised baseline in this repo.
+2. **Reward-based reranking helps when the supervised baseline is weak or imperfect.**
+   Earlier Mind2Web Stage B runs showed that candidate generation plus deterministic reward plus learned reranking can recover meaningful oracle headroom.
+3. **Once strong hybrid supervision saturates most headroom, reranking gains diminish sharply.**
+   Rebuilding Stage B on top of the strong hybrid Stage A baseline shrank official-split headroom from `11/59` pools to `5/59`, and reranking stopped being a robust default improvement.
+4. **On ScreenSpot-v2, the current Qwen-first method is already above the reproduced public plain-Qwen baseline under the repo protocol.**
+   Reproduced public baseline point accuracy is `0.7563`, the point-native decoupled method reaches `0.7736`, and the dual-path candidate generation plus lightweight verifier reaches `0.7791`.
 
-This project focuses on **single-step, instruction-conditioned GUI grounding and action prediction**. It is **not** a complete browser agent or long-horizon web navigation system.
+### Next Steps
 
-Specifically, this project studies:
-1. Supervised baseline for grounding (Stage A)
-2. Candidate generation and reward-based reranking (Stage B)
-3. Pairwise preference optimization / Lightweight GRPO (Stage C)
-4. Cross-website generalization evaluation
+- **Next immediate step:** VisualWebBench supplementary benchmark evaluation and transfer analysis.
+- **Optional later:** ScreenSpot-Pro hard benchmark evaluation.
 
-## Task Definition
+## Project Overview
 
-| Component | Description |
-|-----------|-------------|
-| **Input** | Screenshot image `I`, instruction `u`, optional DOM/OCR cues `c` |
-| **Output** | Target element `e`, bounding box `b`, action type `t ∈ {click, type, select, hover}` |
-| **Reward** | `r = λ1·element_correct + λ2·IoU(b, b*) + λ3·click_inside_target + λ4·action_type_correct − λ5·invalid_format` |
+### Problem Statement
+
+The task is single-step GUI grounding:
+
+- input: screenshot, instruction, and optional candidate cues
+- output: click point, supporting bounding box, and action type
+- objective: generalize across websites and interface layouts while keeping outputs verifiable and auditable
+
+The project is intentionally scoped to the perception-and-selection layer behind GUI agents. It is not a long-horizon browser automation system.
+
+### Research Motivation
+
+Two practical issues motivate this work:
+
+1. Pure supervised grounding can be brittle under layout shifts, dense interfaces, and website changes.
+2. Reward-based selection is only useful if the supervised model leaves enough recoverable headroom in the candidate pool.
+
+This repository therefore studies both sides of the problem:
+
+- building a strong supervised grounding baseline
+- testing whether verifiable reward optimization still matters once that baseline becomes strong
+
+## Pipeline Overview
+
+### Stage A: Strong Supervised Baseline
+
+Stage A is a Qwen-first supervised grounding pipeline that predicts:
+
+- `click_point`
+- `bbox_proposal`
+- `action_type`
+
+The repository now contains both:
+
+- a **pure-visual baseline**
+- a **hybrid screenshot + OCR/DOM candidate-aware baseline**
+
+The hybrid Stage A path uses compact candidate anchors derived from Mind2Web DOM/OCR-style cues and became the first strong supervised baseline in this repo.
+
+Key implementation path:
+
+- [`scripts/run_train_sft.py`](scripts/run_train_sft.py)
+- [`configs/train/mind2web_stageA_qwen2_5_vl_3b_sft_hybrid_candidates.yaml`](configs/train/mind2web_stageA_qwen2_5_vl_3b_sft_hybrid_candidates.yaml)
+
+### Stage B: Candidate Generation, Verifiable Reward, and Reranking
+
+Stage B exports small candidate pools, assigns deterministic verifiable rewards, and trains a lightweight learned reranker.
+
+The core Stage B components are:
+
+- candidate generation from the Stage A model
+- deterministic reward from localization and action correctness signals
+- learned reranking over compact engineered candidate features
+
+The most important current Stage B result is the rebuild on top of the strong hybrid Stage A baseline: once Stage A becomes strong, candidate-pool headroom shrinks and reranking stops giving reliable overall gains.
+
+Key implementation path:
+
+- [`scripts/run_generate_candidates.py`](scripts/run_generate_candidates.py)
+- [`scripts/run_train_reranker.py`](scripts/run_train_reranker.py)
+- [`configs/train/mind2web_stageB_candidates_qwen2_5_vl_3b_hybrid_stagea.yaml`](configs/train/mind2web_stageB_candidates_qwen2_5_vl_3b_hybrid_stagea.yaml)
+- [`configs/train/mind2web_stageB_reranker_qwen_hybrid_stagea.yaml`](configs/train/mind2web_stageB_reranker_qwen_hybrid_stagea.yaml)
+
+### Benchmarking and Evaluation
+
+The repo currently supports two main benchmark tracks:
+
+- **ScreenSpot-v2** for held-out GUI grounding evaluation under a consistent repo protocol
+- **Mind2Web** for supervised grounding, candidate generation, deterministic reward analysis, and reranking
+
+The current benchmark story is complete for these primary tracks. The next benchmark step is supplementary evaluation on **VisualWebBench**.
+
+## Main Experimental Conclusions
+
+### ScreenSpot-v2
+
+ScreenSpot-v2 is the clean held-out benchmark in this repo. The main verified milestones are:
+
+1. same-protocol reproduction of a public plain `Qwen/Qwen2.5-VL-3B-Instruct` baseline
+2. coordinate-frame refinement that fixed a major evaluation mismatch
+3. point-native decoupled Qwen-first evaluation that exceeded the reproduced public baseline
+4. dual-path candidate generation plus lightweight verifier that improved further
+
+Current same-protocol snapshot:
+
+| Method | Point Accuracy | Mean IoU | Notes |
+|---|---:|---:|---|
+| Reproduced public plain-Qwen baseline | `0.7563` | `0.1327` | same repo protocol baseline |
+| Point-native decoupled Qwen-first path | `0.7736` | `0.1912` | strong point-first primary method |
+| Dual-path candidate generation + lightweight verifier | `0.7791` | `0.2520` | current strongest ScreenSpot-v2 result in repo |
+
+Key reports:
+
+- [`docs/public_baseline_reproduction_and_same_protocol_comparison.md`](docs/public_baseline_reproduction_and_same_protocol_comparison.md)
+- [`docs/blueprint_realignment_point_native_decoupling.md`](docs/blueprint_realignment_point_native_decoupling.md)
+- [`docs/dual_path_candidate_generation_and_lightweight_verifier.md`](docs/dual_path_candidate_generation_and_lightweight_verifier.md)
+
+### Mind2Web
+
+Mind2Web is the main blueprint benchmark for the supervised-plus-reward story.
+
+The verified story so far is:
+
+1. the pure-visual Stage A baseline was established and diagnosed
+2. the hybrid screenshot + OCR/DOM candidate representation was built
+3. the hybrid Stage A baseline became the first credible strong supervised baseline
+4. Stage B candidate generation, deterministic reward, and learned reranking were completed
+5. Stage B was rebuilt on top of the strong hybrid Stage A baseline
+6. the rebuild showed that strong hybrid supervision sharply reduces remaining reranking headroom
+
+Representative Mind2Web findings:
+
+| Finding | Evidence |
+|---|---|
+| Pure visual Stage A is not enough | internal validation point accuracy `0.0375`, mean IoU `0.0061` |
+| Hybrid Stage A is strong | internal validation point accuracy `0.7875`, IoU@0.5 `0.7250`, mean IoU `0.7314` |
+| Hybrid augmentation is the dominant Stage A improvement | official subset readouts jump to `0.9500 / 0.8500 / 0.8947` point accuracy on `test_task / test_website / test_domain` |
+| Stage B headroom shrinks on strong Stage A | official-split headroom pools drop from `11/59` to `5/59` |
+| Reranking no longer adds robust overall gains | rebuilt hybrid reranker helps only narrowly on `test_domain` and lowers average official-split reward overall |
+
+Important scope note:
+
+- the current Stage B official-split comparisons use the repo's established pilot-size official split pools for `test_task`, `test_website`, and `test_domain`
+- the conclusion is still clear: once strong hybrid supervision saturates most recoverable mistakes, reward reranking becomes sparse rather than broadly beneficial
+
+Key reports:
+
+- [`docs/mind2web_stageA_hybrid_representation_strong_baseline.md`](docs/mind2web_stageA_hybrid_representation_strong_baseline.md)
+- [`docs/mind2web_stageB_source_aware_reranker_supervision.md`](docs/mind2web_stageB_source_aware_reranker_supervision.md)
+- [`docs/mind2web_stageB_rebuild_on_hybrid_stageA.md`](docs/mind2web_stageB_rebuild_on_hybrid_stageA.md)
+
+## Current Benchmark Coverage
+
+| Benchmark | Role | Status | Current Scope |
+|---|---|---|---|
+| **Mind2Web** | Primary | **Completed for main project story** | Stage A pure-visual baseline, Stage A hybrid baseline, Stage B candidate/reward/reranker, rebuild on hybrid Stage A |
+| **ScreenSpot-v2** | Primary | **Completed for main project story** | full held-out evaluation, public baseline reproduction, point-native decoupling, dual-path verifier |
+| **VisualWebBench** | Supplementary | **Next immediate step** | supplementary benchmark evaluation and transfer analysis |
+| **ScreenSpot-Pro** | Supplementary | Optional later | harder follow-up benchmark if time permits |
 
 ## Repository Structure
 
-```
+The repository contains both the current main pipeline and a number of historical experiment artifacts. The most important directories are:
+
+```text
 .
-├── README.md                       # This file
-├── pyproject.toml                  # Project metadata and tool configuration
-├── requirements.txt                # Python dependencies
-├── .env.example                    # Environment variable template
-│
-├── configs/                        # YAML configuration files
-│   ├── data/                       #   Dataset configs (Mind2Web, ScreenSpot, etc.)
-│   ├── model/                      #   Model configs (Qwen2-VL 2B/7B)
-│   ├── train/                      #   Training configs (SFT, reranker, DPO, GRPO)
-│   ├── eval/                       #   Evaluation configs
-│   └── demo/                       #   Demo configuration
-│
-├── data/                           # Data directory (gitignored, populated by scripts)
-│   ├── raw/                        #   Original downloaded data
-│   ├── interim/                    #   Intermediate artifacts
-│   ├── processed/                  #   Model-ready data
-│   └── manifests/                  #   Split manifests
-│
-├── docs/                           # Documentation
-│   ├── gui_grounding_project_proposal.docx
-│   ├── repo_plan.md                #   Architecture decisions and development order
-│   ├── system_design.md            #   Pipeline design with diagrams
-│   ├── experiment_plan.md          #   Planned experiments and ablation templates
-│   └── dataset_notes.md            #   Dataset roles and preparation checklist
-│
-├── notebooks/                      # Exploratory notebooks
-│   └── exploratory_sanity_checks.ipynb
-│
-├── scripts/                        # Runnable entry points
-│   ├── setup_env.sh                #   Environment setup
-│   ├── prepare_mind2web.py         #   Data preparation
-│   ├── prepare_screenspot_v2.py    #   Data preparation
-│   ├── run_train_sft.py            #   Stage A: SFT training
-│   ├── run_generate_candidates.py  #   Stage B: Candidate generation
-│   ├── run_train_reranker.py       #   Stage B: Reranker training
-│   ├── run_eval_grounding.py       #   Evaluation
-│   ├── run_eval_transfer.py        #   Cross-website evaluation
-│   └── run_demo.py                 #   Gradio demo
-│
-├── src/gui_grounding/              # Main Python package
-│   ├── constants.py                #   Project-wide constants
-│   ├── utils/                      #   Logging, config, seeding, I/O, visualization
-│   ├── data/                       #   Schemas, dataset adapters, collators
-│   ├── models/                     #   VLM backbone, heads, scorer, policy adapter
-│   ├── training/                   #   Losses, 4 trainer variants
-│   ├── reward/                     #   Verifiable reward, candidate generator
-│   ├── evaluation/                 #   Metrics, evaluators, error analysis
-│   └── demo/                       #   Gradio application
-│
-├── tests/                          # Unit tests
-│   ├── test_reward.py              #   Reward function tests
-│   ├── test_metrics.py             #   Evaluation metrics tests
-│   ├── test_config_loading.py      #   Config system tests
-│   └── test_dataset_schema.py      #   Data schema tests
-│
-└── outputs/                        # Training outputs, checkpoints (gitignored)
+├── configs/
+│   ├── data/                  # dataset configs
+│   ├── eval/                  # benchmark evaluation configs
+│   ├── train/                 # Stage A / Stage B training configs
+│   └── demo/                  # demo config
+├── data/
+│   ├── raw/                   # raw benchmark data
+│   ├── processed/             # cached screenshots / processed assets
+│   ├── interim/               # intermediate files
+│   └── manifests/             # split manifests
+├── docs/                      # experiment reports and project documentation
+├── outputs/                   # checkpoints, benchmark outputs, analysis artifacts
+├── scripts/                   # main runnable entry points
+├── src/gui_grounding/
+│   ├── data/                  # dataset adapters and schemas
+│   ├── models/                # Qwen adapters and scorers
+│   ├── reward/                # verifiable reward and lightweight verifier logic
+│   ├── training/              # SFT and reranker training
+│   ├── evaluation/            # metrics and evaluators
+│   ├── utils/                 # config, IO, logging, visualization
+│   └── demo/                  # demo app
+└── tests/                     # unit tests
 ```
 
-## Quick Start
+## Main Entry Points and Reproduction
 
-### 1. Create Environment
+### Installation
 
 ```bash
-# Clone and enter the repo
-cd Cross-Website-GUI-Grounding-with-Verifiable-Reward-Optimization
-
-# Create a conda environment
 conda create -n gui-grounding python=3.10 -y
 conda activate gui-grounding
-
-# Or use the setup script
-bash scripts/setup_env.sh
-```
-
-### 2. Install Dependencies
-
-```bash
 pip install -e ".[dev]"
-# Or: pip install -r requirements.txt
 ```
 
-### 3. Verify Installation
+### Data Preparation
 
 ```bash
-# Run tests (no GPU or data required)
-pytest tests/ -v
-
-# Smoke test: load a config and run candidate generation + reward scoring
-python scripts/run_generate_candidates.py --config configs/train/rerank_reward.yaml
-
-# Smoke test: run evaluation with dummy data
-python scripts/run_eval_grounding.py --config configs/eval/grounding_eval.yaml
+python scripts/prepare_mind2web.py
+python scripts/prepare_screenspot_v2.py
 ```
 
-### 4. Load Mind2Web Data and Run Sanity Check
+### ScreenSpot-v2
 
-The adapter loads directly from HuggingFace (streaming, no bulk download needed):
+Run the strongest single-path Qwen-first evaluation:
 
 ```bash
-# Inspect real data: load 20 samples, print stats, save visualizations
-python scripts/inspect_mind2web_samples.py --split train --max-samples 20
-
-# Run the full sanity pipeline: data → candidates → reward → metrics
-python scripts/run_mind2web_sanity_pipeline.py --split train --max-samples 10
+python scripts/run_eval_screenspot_v2.py \
+  --config configs/eval/screenspot_v2_qwen2_5_vl_3b_point_native_decoupled.yaml
 ```
 
-Screenshots are cached to `data/processed/mind2web_screenshots/` on first load.
+Run the dual-path candidate generation plus lightweight verifier:
 
-### 5. Run the Demo
+```bash
+python scripts/run_eval_dual_path_verifier.py \
+  --config configs/eval/screenspot_v2_qwen2_5_vl_3b_dual_path_verifier.yaml
+```
+
+Reference public baseline reproduction:
+
+```bash
+python scripts/run_eval_screenspot_v2.py \
+  --config configs/eval/screenspot_v2_public_qwen2_5_vl_3b_point_baseline.yaml
+```
+
+### Mind2Web Stage A
+
+Train the strong hybrid supervised baseline:
+
+```bash
+python scripts/run_train_sft.py \
+  --config configs/train/mind2web_stageA_qwen2_5_vl_3b_sft_hybrid_candidates.yaml
+```
+
+### Mind2Web Stage B
+
+Export rebuilt Stage B candidate pools on top of the hybrid Stage A baseline:
+
+```bash
+python scripts/run_generate_candidates.py \
+  --config configs/train/mind2web_stageB_candidates_qwen2_5_vl_3b_hybrid_stagea.yaml
+```
+
+Train and evaluate the rebuilt hybrid-stage-A reranker:
+
+```bash
+python scripts/run_train_reranker.py \
+  --config configs/train/mind2web_stageB_reranker_qwen_hybrid_stagea.yaml
+```
+
+### Demo
 
 ```bash
 python scripts/run_demo.py --config configs/demo/demo.yaml
-# Opens at http://localhost:7860
 ```
 
-## Current Progress and Results
+## Key Outputs and Reports
 
-This repository is no longer just a scaffold. The Qwen-first evaluation path is live, and the main comparable ScreenSpot-v2 metric is now tracked under one consistent repo protocol.
+Current best benchmark artifacts:
 
-### What Has Been Achieved
+- ScreenSpot-v2 point-native decoupled:
+  - `outputs/screenspot_v2_eval_qwen2_5_vl_3b_point_native_decoupled/`
+- ScreenSpot-v2 dual-path verifier:
+  - `outputs/screenspot_v2_eval_qwen2_5_vl_3b_dual_path_verifier/`
+- Mind2Web hybrid Stage A:
+  - `outputs/mind2web_stageA_sft_hybrid_candidates/`
+- Mind2Web rebuilt Stage B on hybrid Stage A:
+  - `outputs/mind2web_stageB_candidates_hybrid_stagea/`
+  - `outputs/mind2web_stageB_reranker_hybrid_stagea/`
+  - `outputs/mind2web_stageB_rebuild_hybrid_stagea/`
 
-- Integrated a real Qwen-first inference path for GUI grounding.
-- Built a clean ScreenSpot-v2 evaluation runner with canonical `bbox_proposal` / `click_point` / `action_type` outputs.
-- Reproduced a plain public `Qwen/Qwen2.5-VL-3B-Instruct` same-protocol baseline inside this repo.
-- Fixed the major coordinate-frame mismatch that had previously dominated underperformance.
-- Iterated from bbox-heavier structured decoding to point-first decoding, then to a blueprint-aligned point-native decoupled decode path.
-- Preserved structured outputs while improving the main comparable metric, `point_accuracy`.
+Useful documentation entry points:
 
-### Same-Protocol ScreenSpot-v2 Snapshot
-
-| Method | Point Acc | Desktop | Web | Mobile | IoU@0.5 | Mean IoU | Action Valid | Parseable |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| Reproduced public Qwen baseline | 0.7563 | 0.7275 | 0.7346 | 0.7944 | 0.0519 | 0.1327 | 0.2980 | 0.9937 |
-| Structured refined method | 0.7099 | 0.6976 | 0.6796 | 0.7445 | 0.1682 | 0.2404 | 1.0000 | 1.0000 |
-| Best prior point-first refinement | 0.7296 | 0.7305 | 0.6751 | 0.7764 | 0.1635 | 0.2365 | 1.0000 | 1.0000 |
-| Later web/mobile hotspot prompt tweak | 0.7264 | 0.7305 | 0.6796 | 0.7645 | 0.1588 | 0.2286 | 0.9992 | 0.9992 |
-| **Point-native decoupled structured path** | **0.7736** | **0.7365** | **0.7620** | **0.8084** | **0.0967** | **0.1912** | **1.0000** | **1.0000** |
-
-### Current Best Method
-
-The current best same-protocol result is the blueprint-aligned point-native decoupled path:
-
-- `click_point` is predicted first in a point-native Qwen pass
-- `bbox_proposal` and `action_type` are attached in a secondary structured pass
-- the output contract remains compatible with later candidate export and reward-based scoring
-- same-protocol result is now above the reproduced public plain-Qwen baseline on the main comparable metric
-
-Latest best-run artifacts:
-
-- `outputs/screenspot_v2_eval_qwen2_5_vl_3b_point_native_decoupled/evaluation_summary.json`
-- `outputs/screenspot_v2_eval_qwen2_5_vl_3b_point_native_decoupled/subgroup_metrics.json`
-- `outputs/screenspot_v2_eval_qwen2_5_vl_3b_point_native_decoupled/comparison_vs_previous_structured.md`
-- `outputs/screenspot_v2_eval_qwen2_5_vl_3b_point_native_decoupled/comparison_vs_point_first.md`
-- `outputs/screenspot_v2_eval_qwen2_5_vl_3b_point_native_decoupled/comparison_vs_public_baseline.md`
-
-Key writeups:
-
+- [`docs/final_project_report.md`](docs/final_project_report.md)
+- [`docs/final_artifact_index.md`](docs/final_artifact_index.md)
 - [`docs/public_baseline_reproduction_and_same_protocol_comparison.md`](docs/public_baseline_reproduction_and_same_protocol_comparison.md)
-- [`docs/point_accuracy_first_refinement_against_public_qwen.md`](docs/point_accuracy_first_refinement_against_public_qwen.md)
-- [`docs/web_mobile_same_protocol_refinement_round.md`](docs/web_mobile_same_protocol_refinement_round.md)
-- [`docs/blueprint_realignment_point_native_decoupling.md`](docs/blueprint_realignment_point_native_decoupling.md)
+- [`docs/dual_path_candidate_generation_and_lightweight_verifier.md`](docs/dual_path_candidate_generation_and_lightweight_verifier.md)
+- [`docs/mind2web_stageA_hybrid_representation_strong_baseline.md`](docs/mind2web_stageA_hybrid_representation_strong_baseline.md)
+- [`docs/mind2web_stageB_rebuild_on_hybrid_stageA.md`](docs/mind2web_stageB_rebuild_on_hybrid_stageA.md)
 
-## Current Development Stage
+## Current Project Status
 
-### Completed
+The main primary-benchmark research story is complete:
 
-- [x] Full project scaffold with clean module boundaries
-- [x] YAML configuration system (OmegaConf) with all experiment configs
-- [x] Canonical data schemas (Pydantic) for grounding samples and candidates
-- [x] **Real Mind2Web data pipeline** — HF streaming → `GroundingSample` with verified field mapping
-- [x] **Fully functional verifiable reward calculator** (element, IoU, click, action, format penalty)
-- [x] **Fully functional evaluation metrics** (element acc, point acc, IoU@k, action acc, reranking gain)
-- [x] Candidate generator (dummy + heuristic modes)
-- [x] End-to-end sanity pipeline: real data → candidate generation → reward scoring → metrics
-- [x] Data inspection script with bbox visualization on real screenshots
-- [x] Training loop skeletons for all 4 stages (SFT, Reranker, DPO, GRPO-light)
-- [x] Model interface layer (VLM backbone, grounding head, action head, scorer, policy adapter)
-- [x] Gradio demo application (scaffold mode)
-- [x] Unit tests for reward, metrics, config, data schemas, and Mind2Web adapter
-- [x] Error analysis utilities
-- [x] Comprehensive documentation
-- [x] Real Qwen backbone integration for single-step GUI grounding
-- [x] Clean ScreenSpot-v2 held-out evaluation under one repo protocol
-- [x] Same-protocol reproduction of the plain public Qwen baseline
-- [x] Coordinate-frame repair and same-protocol comparison reporting
-- [x] Blueprint-aligned point-native decoupled decode path with structured outputs retained
-- [x] Full ScreenSpot-v2 re-evaluation for the new point-native decoupled method
+- ScreenSpot-v2 held-out evaluation is complete
+- Mind2Web Stage A supervised baseline work is complete
+- Mind2Web Stage B reward-pipeline work is complete
+- the key scientific conclusion about diminishing reranking returns on top of strong hybrid supervision is now established
 
-### In Progress / Not Yet Implemented
+That means the repository is no longer in a pipeline-construction phase. It is in a **supplementary benchmark and transfer-analysis phase**.
 
-- [~] Formal top-k candidate generation built around the new point-primary action object
-  - Implemented top-k export + diversity/gating utilities: `scripts/run_generate_candidates.py`
-  - Still missing a fully unified point-primary action-object candidate API (see scaffold TODOs): `src/gui_grounding/reward/candidate_generator.py`
-- [x] Lightweight verifier / reward scorer for candidate selection
-  - Dual-path candidate builder + scoring: `src/gui_grounding/reward/lightweight_verifier.py`
-  - End-to-end evaluation script (ScreenSpot-v2): `scripts/run_eval_dual_path_verifier.py`
-- [ ] Coarse-to-fine local crop refinement for small targets and dense interfaces
-- [ ] Text-target vs icon-target specialized decoding / refinement logic
-- [ ] Preference optimization or larger training loops on top of a stronger candidate-and-verifier pipeline
-- [ ] Broader transfer evaluation on additional benchmarks after the method stack stabilizes
+## Roadmap / Next Steps
 
-## Near-Term Technical Roadmap
+### Next Immediate Step
 
-The next goal is **method improvement**, not more bug recovery and not another round of tiny prompt wording changes.
+**VisualWebBench supplementary benchmark evaluation and transfer analysis**
 
-### Near-Term Priorities
+The immediate goal is to test whether the current conclusions transfer beyond the primary benchmarks:
 
-1. **Formalize the dual-path decode design**
-   - Treat the point-native path as the primary click predictor.
-   - Treat the bbox/action path as supporting structure.
-   - Export candidates with `click_point_primary`, `bbox_support`, `action_type`, confidence, and provenance-style metadata.
+- how the current Qwen-first grounding stack transfers to a supplementary benchmark
+- whether the ScreenSpot-v2 and Mind2Web story remains consistent
+- whether the sparse residual value of Stage B becomes more visible on harder or more transfer-heavy settings
 
-2. **Build top-k candidates + a lightweight verifier**
-   - Let the main model propose multiple candidates.
-   - Use a reward-aligned verifier or scorer to choose top-1.
-   - This matches the original Stage B direction more closely than immediately retraining a larger backbone.
+### Optional Later Step
 
-3. **Add coarse-to-fine local refinement**
-   - Use the first-stage point to crop or zoom into a local region.
-   - Refine small targets, icon-only targets, dense layouts, and bbox quality without pulling the primary click back into bbox-first coupling.
+**ScreenSpot-Pro hard benchmark**
 
-4. **Split text and icon handling more explicitly**
-   - Use separate lightweight logic for text targets vs icon/widget targets.
-   - Keep this as a method-level distinction rather than another single shared prompt tweak.
+This is a later follow-up benchmark rather than the next required milestone.
 
-5. **Only then move to heavier training**
-   - Revisit reranker training, preference optimization, or other larger optimization stages after the candidate-and-verifier path is strong enough.
+## Notes
 
-### What Is De-Prioritized For Now
-
-- More pure prompt micro-tuning as the main strategy
-- Jumping straight into large retraining before the candidate/verifier path is in place
-- Going back to a heavy RL shell before reward-based candidate selection is stable
-
-## Method Status Summary
-
-The project has already moved through three distinct phases:
-
-1. **Error recovery**
-   - repairing coordinate mismatch and rebuilding a fair same-protocol baseline
-2. **Decode realignment**
-   - moving from bbox-heavier structured decoding toward point-first behavior
-3. **Blueprint-aligned method improvement**
-   - promoting click point to the primary prediction object while retaining structured outputs
-
-The next stage should therefore focus on:
-
-- candidate-layer improvements
-- verifier / reward-based selection
-- localized refinement
-
-rather than more bug-fix-style gains.
-
-## Datasets
-
-| Dataset | Role | Reference |
-|---------|------|-----------|
-| Multimodal-Mind2Web | Train + eval | Deng et al., NeurIPS 2023 |
-| ScreenSpot-v2 | Primary eval | 2025 release |
-| VisualWebBench | Supplementary eval | Wang et al., 2024 |
-| ScreenSpot-Pro | Optional hard eval | Li et al., 2025 |
-
-See [`docs/dataset_notes.md`](docs/dataset_notes.md) for detailed dataset documentation.
-
-## Status Note
-
-This repository now contains real same-protocol evaluation artifacts and documented benchmark results for the Qwen-first grounding path. The current strongest result in this repo is the point-native decoupled structured method on ScreenSpot-v2.
-
-What remains unfinished is not the basic evaluation pipeline, but the next layer of method work:
-
-- candidate generation around the point-primary action object
-- verifier / reward-based selection
-- stronger secondary localization quality
-
-## License
-
-MIT
-
-## References
-
-1. Deng et al., "Mind2Web: Towards a Generalist Agent for the Web", NeurIPS 2023
-2. Zheng et al., "GPT-4V(ision) is a Generalist Web Agent, if Grounded", 2024
-3. Cheng et al., "SeeClick: Harnessing GUI Grounding for Advanced Visual GUI Agents", 2024
-4. ScreenSpot-v2 dataset release, 2025
-5. Wang et al., "VisualWebBench", 2024
-6. Li et al., "ScreenSpot-Pro", 2025
+- This repository contains historical intermediate experiments and exploratory artifacts. The README reflects the **current verified project story**, not every earlier branch of exploration.
+- The current README intentionally avoids overstating Stage B: the evidence now supports a nuanced conclusion, not a blanket claim that reward reranking always improves a strong supervised GUI grounding model.
