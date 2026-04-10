@@ -1,265 +1,204 @@
 # Final Presentation Outline
 
-Suggested length: 12 slides  
-Talk style: evidence-first, visually driven, honest about pivots
+Recommended length: 10 to 12 slides  
+Recommended style: thesis first, evidence second, honest about negative findings
 
-## Slide 1 - Title and One-Sentence Claim
+## Source of Truth
 
-**Slide title**  
+Use these files when writing slide numbers:
+
+- [`outputs/quantitative_metrics_suite/summary.md`](../outputs/quantitative_metrics_suite/summary.md)
+- [`outputs/quantitative_metrics_suite/summary.json`](../outputs/quantitative_metrics_suite/summary.json)
+- [`docs/standalone_quantitative_evaluation_section.md`](standalone_quantitative_evaluation_section.md)
+
+Use these for visuals:
+
+- [`outputs/final_packaging/figures/`](../outputs/final_packaging/figures/)
+
+## Slide 1 - Title and Final Thesis
+
+**Title**
+
 Cross-Website GUI Grounding with Verifiable Reward Optimization
 
-**Bullets**
+**What to say**
 
-- Goal: map screenshot + instruction to grounded UI action
-- Final main result: fixing coordinate-frame mismatch transformed held-out performance on ScreenSpot-v2
-- Final method: Qwen-first grounding with model-resized coordinate refinement
-
-**Recommended visual**
-
-- One large benchmark headline panel with:
-  - point accuracy `0.0849 -> 0.7099`
-  - ScreenSpot-v2 `1272/1272`
-
-**Speaker note / intent**
-
-- Open with the final answer, not the chronology. The audience should immediately know what worked.
-
-## Slide 2 - Why GUI Grounding Matters
-
-**Bullets**
-
-- Browser/computer-use agents need reliable UI localization before they can act
-- The project focuses on single-step grounding/action prediction, not full long-horizon execution
-- This isolates a core bottleneck that can be measured cleanly
+- Goal: map `screenshot + instruction` to `element / bbox / click point / action type`
+- Final thesis:
+  - hybrid OCR/DOM candidate augmentation is critical when candidate structure is meaningful
+  - point-first grounding transfers well on held-out GUI benchmarks
+  - reward-based reranking helps when headroom exists, then saturates
 
 **Recommended visual**
 
-- Two example screenshots with a highlighted target element
-- Optional use one existing qualitative visualization from `outputs/qwen_multisample_validation_qwen2_5/visualizations/`
+- [`cross_benchmark_summary.md`](../outputs/final_packaging/tables/cross_benchmark_summary.md)
 
-**Speaker note / intent**
+## Slide 2 - Problem Framing and RL Connection
 
-- Establish practical importance and keep scope disciplined.
+**What to say**
 
-## Slide 3 - Why This Is RL-Relevant
-
-**Bullets**
-
-- Contextual-bandit framing:
-  - state/context = screenshot + instruction
-  - action = `bbox_proposal`, `click_point`, `action_type`
-  - reward = correctness, IoU, click-inside-target, format validity
-- Verifiable reward makes the problem RL-relevant without requiring full environment rollouts
-- Early project stages used this reward for reranking and preference optimization
+- Scope is single-step GUI grounding, not full browser automation
+- Context = screenshot + instruction
+- Action = `click_point`, `bbox_proposal`, `action_type`
+- Reward = element correctness + click validity + IoU + action-type correctness - invalid format
+- The project stayed inside this RL framing, but the strongest gains came from representation and inference structure
 
 **Recommended visual**
 
-- Simple pipeline diagram: input -> action prediction -> verifiable reward
+- Simple contextual-bandit diagram or a hand-built pipeline figure
 
-**Speaker note / intent**
+## Slide 3 - Benchmarks and Why Each One Matters
 
-- Make the RL connection explicit early so the later engineering results still fit the course.
+**What to say**
 
-## Slide 4 - Original Plan vs Actual Project Arc
-
-**Bullets**
-
-- Initial plan:
-  - supervised baseline
-  - candidate generation
-  - reward reranking / DPO / lightweight policy improvement
-- What actually happened:
-  - surrogate path helped build infrastructure
-  - reward optimization gave limited gains
-  - Qwen-first held-out debugging produced the main breakthrough
+- Mind2Web:
+  - main benchmark for supervision, candidate structure, and Stage B reranking
+- ScreenSpot-v2:
+  - clean held-out benchmark for transfer-ready grounding
+- VisualWebBench:
+  - supplementary transfer test under a mismatched anonymous-box protocol
 
 **Recommended visual**
 
-- Simple 3-phase timeline:
-  - surrogate/reward exploration
-  - Qwen runtime unblock and realignment
-  - ScreenSpot-v2 debugging and full rerun
+- one 3-column benchmark role table
 
-**Speaker note / intent**
+## Slide 4 - Mind2Web Negative Result: Pure Visual Was Too Weak
 
-- Frame the pivot as disciplined project management, not loss of direction.
+**What to say**
 
-## Slide 5 - Early Exploration: What Did Not Become the Final Result
-
-**Bullets**
-
-- CLIP-grid Stage A baseline was runnable but too coarse
-- Learned reranker on small candidate pools showed no measurable gain
-- Feature-upgraded reranker produced only tiny gains:
-  - full-pool reward gain `+0.0001657`
-  - headroom-subset reward gain `+0.0005340`
-- DPO-style and preference-redesign stages did not beat the best reranker baseline
+- Geometry-collapse bug was fixed first
+- Even after that, pure-visual Stage A stayed weak:
+  - internal point accuracy `0.0375`
+  - internal mean IoU `0.0061`
+- This ruled out the easy claim that screenshot-only supervision was already enough
 
 **Recommended visual**
 
-- Small summary table of Stage 5 / 5c / 6A / 6A.5 outcomes
+- left panel from [`mind2web_stageA_pure_vs_hybrid.png`](../outputs/final_packaging/figures/mind2web_stageA_pure_vs_hybrid.png)
 
-**Speaker note / intent**
+## Slide 5 - Mind2Web Positive Result: Hybrid Candidate-Aware Stage A
 
-- Be direct: reward optimization was a real exploration path, but not the headline empirical success.
+**What to say**
 
-## Slide 6 - Qwen-First Realignment
+- Added screenshot + OCR/DOM-style candidate anchors
+- Added candidate-slot supervision and candidate-anchored grounding
+- Internal validation jumped to:
+  - point accuracy `0.7875`
+  - mean IoU `0.7314`
+- Official cached subset metrics:
 
-**Bullets**
-
-- Repository was realigned back to a real multimodal backbone
-- Qwen runtime path was unblocked and stable enough for evaluation
-- Medium-scale Qwen export evidence:
-  - `50/50` successful samples
-  - `200/200` parseable outputs
-  - `199/200` valid bbox and click-point outputs
-
-**Recommended visual**
-
-- Short evidence box with the three numbers above
-- Optional artifact screenshot from `outputs/single_inference_qwen_unblock/`
-
-**Speaker note / intent**
-
-- Show that by the time held-out evaluation started, runtime stability was largely solved.
-
-## Slide 7 - Initial ScreenSpot-v2 Held-Out Result
-
-**Bullets**
-
-- First full clean held-out run completed on `1272/1272` samples
-- Output structure was already highly stable:
-  - parseable rate `0.9992`
-  - valid bbox rate `0.9992`
-  - valid click-point rate `0.9992`
-- But grounding quality was weak:
-  - point accuracy `0.0849`
-  - web `0.0046`
-  - mobile `0.0060`
+| Split | Element | Point | IoU@0.5 | Action |
+| --- | ---: | ---: | ---: | ---: |
+| `test_task` | `95.00%` | `95.00%` | `95.00%` | `90.00%` |
+| `test_website` | `80.00%` | `85.00%` | `85.00%` | `95.00%` |
+| `test_domain` | `89.47%` | `89.47%` | `89.47%` | `94.74%` |
 
 **Recommended visual**
 
-- Overall before/after figure, but initially highlight only the baseline bars
-- Or show the core metrics table from `outputs/final_packaging/tables/screenspot_v2_core_metrics_summary.md`
+- [`mind2web_stageA_pure_vs_hybrid.png`](../outputs/final_packaging/figures/mind2web_stageA_pure_vs_hybrid.png)
 
-**Speaker note / intent**
+## Slide 6 - Mind2Web Stage B: Headroom Exists Before Saturation
 
-- The key setup for the debugging story is that structure was fine while localization was bad.
+**What to say**
 
-## Slide 8 - Failure Analysis: Coordinate Mismatch
-
-**Bullets**
-
-- Dominant failure mode was spatial, not formatting-related
-- Predictions were systematically shrunk relative to the original screenshot
-- Counterfactual diagnostic was decisive:
-  - reinterpreting saved baseline outputs in resized-image coordinates would raise point accuracy to `0.6863`
-  - IoU@0.5 would rise to `0.1321`
+- Earlier weaker Stage A left real recoverable headroom in the candidate pool
+- Oracle best-of-k headroom from saved candidate artifacts:
+  - historical `k=4`: `+10.17 pts`
+  - historical `k=8 expanded`: `+10.17 pts`
+  - final hybrid rebuild `k=4`: `+5.08 pts`
+- Interpretation:
+  - reward-based reranking is meaningful when baseline errors are still recoverable
+  - strong Stage A shrinks the remaining headroom
 
 **Recommended visual**
 
-- Diagram showing original screenshot frame vs model-resized frame
-- A short callout box with the counterfactual numbers
+- [`mind2web_stageB_headroom_old_vs_hybrid_rebuild.png`](../outputs/final_packaging/figures/mind2web_stageB_headroom_old_vs_hybrid_rebuild.png)
 
-**Speaker note / intent**
+## Slide 7 - ScreenSpot-v2 Turning Point: Coordinate-Frame Mismatch
 
-- This is the centerpiece of the talk. Spend time here.
+**What to say**
 
-## Slide 9 - The Fix
-
-**Bullets**
-
-- One focused refinement only:
-  - prompt Qwen to emit coordinates in the resized model-view frame
-  - scale predictions back to the original screenshot before evaluation
-- No new training
-- No reranker redesign
-- No pipeline replacement
+- Initial localization looked catastrophically bad
+- Failure analysis showed a frame mismatch between model-resized coordinates and original screenshot coordinates
+- After refinement, the held-out benchmark became meaningful
+- This debugging step matters because it turned an invalid benchmark loop into a reliable one
 
 **Recommended visual**
 
-- Before/after coordinate transform diagram
-- Three-step arrow: predict in model frame -> clamp -> map back
+- a coordinate-frame diagram, or the before/after ScreenSpot figure
 
-**Speaker note / intent**
+## Slide 8 - ScreenSpot-v2 Final Method Ladder
 
-- Emphasize how small the code change was relative to the benchmark impact.
+**What to say**
 
-## Slide 10 - Diagnostic Reevaluations Before the Full Rerun
+| Method | Point Acc | IoU@0.5 | Mean IoU |
+| --- | ---: | ---: | ---: |
+| public plain-Qwen baseline | `75.63%` | `5.19%` | `13.27%` |
+| point-native decoupled | `77.36%` | `9.67%` | `19.12%` |
+| dual-path verifier | `77.91%` | `17.22%` | `25.20%` |
 
-**Bullets**
-
-- Balanced `180` samples:
-  - point accuracy `0.1222 -> 0.6833`
-- Balanced `360` samples:
-  - point accuracy `0.1194 -> 0.6722`
-- These subset checks justified running the full official rerun
-
-**Recommended visual**
-
-- Small two-row table for the 180 and 360 subset checks
-
-**Speaker note / intent**
-
-- Show that the final rerun was evidence-driven, not a blind full rerun.
-
-## Slide 11 - Final Full Benchmark Result
-
-**Bullets**
-
-- Official full rerun: `1272/1272` samples
-- Overall:
-  - point accuracy `0.0849 -> 0.7099`
-  - IoU@0.5 `0.0102 -> 0.1682`
-  - mean IoU `0.0196 -> 0.2404`
-- Broad gains across platforms:
-  - desktop `0.3084 -> 0.6976`
-  - mobile `0.0060 -> 0.7445`
-  - web `0.0046 -> 0.6796`
+- Point-native beat the reproduced public baseline
+- Dual-path improved slightly further and recovered stronger box quality
+- Subgroup finding:
+  - text vs icon point-accuracy gap = `+19.70 pts`
 
 **Recommended visual**
 
-- `outputs/final_packaging/figures/screenspot_v2_overall_before_after.png`
-- `outputs/final_packaging/figures/screenspot_v2_platform_point_accuracy_before_after.png`
+- [`screenspot_v2_before_after_and_method_comparison.png`](../outputs/final_packaging/figures/screenspot_v2_before_after_and_method_comparison.png)
 
-**Speaker note / intent**
+## Slide 9 - VisualWebBench Refined the Transfer Claim
 
-- This is the empirical climax. Keep it clean and numerical.
+**What to say**
 
-## Slide 12 - Takeaways and Honest Limits
+| Method | Official Choice Acc | Point Acc | Mean IoU |
+| --- | ---: | ---: | ---: |
+| structured screenshot-only | `78.88%` | `64.53%` | `32.06%` |
+| point-native decoupled | `87.21%` | `79.46%` | `34.35%` |
+| dual-path verifier | `86.82%` | `79.65%` | `33.12%` |
+| Mind2Web hybrid transfer | `23.84%` | `23.84%` | `23.84%` |
 
-**Bullets**
-
-- Final main claim:
-  - the strongest project result is Qwen-first held-out grounding improvement via coordinate-frame refinement
-- RL relevance remains real through contextual-bandit framing and verifiable reward
-- Reward optimization was part of the story, but not the strongest final empirical result
-- Limits:
-  - single-step grounding only
-  - not full browser-agent execution
-  - final claim is benchmarked on ScreenSpot-v2, not every GUI benchmark
+- Point-first transfer remained strong
+- Dual-path no longer beat point-native overall
+- Mind2Web hybrid transfer failed because candidate semantics did not transfer
 
 **Recommended visual**
 
-- Final takeaway box plus one compact artifact path list
+- [`visualwebbench_method_comparison.png`](../outputs/final_packaging/figures/visualwebbench_method_comparison.png)
 
-**Speaker note / intent**
+## Slide 10 - Final Takeaways
 
-- End with a claim the evidence fully supports and nothing stronger.
+**What to say**
 
-## Optional Backup Slide - Artifact Map
-
-**Bullets**
-
-- Final report
-- Benchmark figures and tables
-- Final evaluation summaries
-- Best config and key output directories
+- Strong positive result:
+  - hybrid OCR/DOM candidate augmentation is critical when candidate structure is meaningful
+- Strong transferable result:
+  - point-first grounding is robust across held-out GUI benchmarks
+- Scoped RL result:
+  - reranking helps when headroom exists
+  - reranking saturates once strong supervision already solves most recoverable cases
+- Negative but important result:
+  - candidate-aware transfer fails under mismatched anonymous-box protocols
 
 **Recommended visual**
 
-- One-column file path list drawn from `docs/final_artifact_index.md`
+- [`cross_benchmark_summary.md`](../outputs/final_packaging/tables/cross_benchmark_summary.md)
 
-**Speaker note / intent**
+## Optional Slide 11 - Runtime and Deployment Practicality
 
-- Useful if asked how to navigate the repository quickly.
+**What to say**
+
+- ScreenSpot-v2 point-native first choice: `2.1185 s / image`
+- structured support path: `1.3599 s / image`
+- verifier overhead only: `0.000167 s / image`
+- dual-path end-to-end: `3.4786 s / image`
+- Main point:
+  - the final system is a practical perception-and-selection stack, not a huge multi-stage agent loop
+
+## Optional Slide 12 - Limits and Honest Scope
+
+**What to say**
+
+- Mind2Web official split results are pilot-sized cached subset readouts
+- The project studies single-step grounding, not complete browser automation
+- Stage B should not be oversold as a universal reranking win
+- The correct final claim is narrower and stronger because it is evidence-backed

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from gui_grounding.reward.verifiable_reward import bbox_iou
+from gui_grounding.reward.verifiable_reward import bbox_iou, invalid_format_penalty
 
 
 # -----------------------------------------------------------------------
@@ -110,6 +110,42 @@ def mean_normalized_click_l1(
             (abs(float(pred[0]) - float(gt[0])) / width + abs(float(pred[1]) - float(gt[1])) / height) / 2.0
         )
     return sum(errors) / max(len(errors), 1)
+
+
+def invalid_format_rate(
+    pred_bboxes: list[Optional[tuple[float, float, float, float]]] | None = None,
+    pred_points: list[Optional[tuple[float, float]]] | None = None,
+    image_sizes: list[Optional[tuple[int, int]]] | None = None,
+) -> float:
+    """Fraction of samples whose prediction fails basic format validation.
+
+    A sample is counted as invalid if the predicted box or click point is
+    malformed, out of bounds, or if both are missing.
+    """
+    pred_bboxes = pred_bboxes or []
+    pred_points = pred_points or []
+    image_sizes = image_sizes or []
+
+    total = max(len(pred_bboxes), len(pred_points), len(image_sizes))
+    if total == 0:
+        return 0.0
+
+    invalid = 0
+    for idx in range(total):
+        bbox = pred_bboxes[idx] if idx < len(pred_bboxes) else None
+        point = pred_points[idx] if idx < len(pred_points) else None
+        image_size = image_sizes[idx] if idx < len(image_sizes) else None
+        image_width = image_size[0] if image_size is not None else None
+        image_height = image_size[1] if image_size is not None else None
+        penalty = invalid_format_penalty(
+            pred_bbox=bbox,
+            pred_click=point,
+            image_width=image_width,
+            image_height=image_height,
+        )
+        if penalty > 0.0:
+            invalid += 1
+    return invalid / total
 
 
 # -----------------------------------------------------------------------

@@ -1,84 +1,114 @@
 # Final Artifact Index
 
-## One-Paragraph Project Summary
+This file is the handoff map for report writing, presentation building, and artifact lookup.
 
-This project packages **Cross-Website GUI Grounding with Verifiable Reward Optimization** as a multimodal LLM engineering study of screenshot + instruction to grounded UI action prediction. The final report keeps the RL relevance explicit through a contextual-bandit formulation and verifiable reward, but the strongest final empirical result is not reward optimization alone. Early surrogate/reranker/preference experiments produced useful infrastructure and negative findings, while the decisive held-out improvement came from the Qwen-first path after identifying and fixing a coordinate-frame mismatch between the resized model-view image and the original screenshot. On the full ScreenSpot-v2 clean held-out benchmark, this refinement improved point accuracy from `0.0849` to `0.7099` on `1272/1272` samples.
+## Read These First
 
-## Main Deliverables
+1. [`README.md`](../README.md)
+2. [`final_handoff_brief.md`](final_handoff_brief.md)
+3. [`standalone_quantitative_evaluation_section.md`](standalone_quantitative_evaluation_section.md)
+4. [`final_presentation_outline.md`](final_presentation_outline.md)
+5. [`final_project_report.md`](final_project_report.md)
 
-- Final report:
-  - `docs/final_project_report.md`
-- Final presentation outline:
-  - `docs/final_presentation_outline.md`
-- Final packaging figures:
-  - `outputs/final_packaging/figures/`
-- Final packaging tables:
-  - `outputs/final_packaging/tables/`
-- Optional demo narrative:
-  - `docs/final_demo_narrative.md`
+## Source of Truth for Exact Numbers
 
-## Best Method and Best Config
+Use these files for any metric you quote in the final report or slides:
 
-- Best method:
-  - `Qwen/Qwen2.5-VL-3B-Instruct` with `coordinate_frame=model_resized`
-- Named config:
-  - `configs/eval/screenspot_v2_qwen2_5_vl_3b_model_resized_full.yaml`
+- [`summary.json`](../outputs/quantitative_metrics_suite/summary.json)
+- [`summary.md`](../outputs/quantitative_metrics_suite/summary.md)
+- [`standalone_quantitative_evaluation_section.md`](standalone_quantitative_evaluation_section.md)
 
-## Authoritative Evaluation Artifacts
+Important rule:
 
-- Baseline full held-out summary:
-  - `outputs/screenspot_v2_eval_qwen2_5_vl_3b/evaluation_summary.json`
-- Baseline subgroup metrics:
-  - `outputs/screenspot_v2_eval_qwen2_5_vl_3b/subgroup_metrics.json`
-- Final full rerun summary:
-  - `outputs/screenspot_v2_eval_qwen2_5_vl_3b_model_resized/evaluation_summary.json`
-- Final subgroup metrics:
-  - `outputs/screenspot_v2_eval_qwen2_5_vl_3b_model_resized/subgroup_metrics.json`
-- Before/after comparison:
-  - `outputs/screenspot_v2_eval_qwen2_5_vl_3b_model_resized/comparison_vs_baseline.json`
-  - `outputs/screenspot_v2_eval_qwen2_5_vl_3b_model_resized/comparison_vs_baseline.md`
+- use `outputs/quantitative_metrics_suite/*` for exact numbers
+- use `outputs/final_packaging/*` for presentation-ready visuals
 
-## Final Figures
+## Most Useful Visual Assets
 
-- Overall before/after chart:
-  - `outputs/final_packaging/figures/screenspot_v2_overall_before_after.png`
-- Platform before/after chart:
-  - `outputs/final_packaging/figures/screenspot_v2_platform_point_accuracy_before_after.png`
-- Element-type before/after chart:
-  - `outputs/final_packaging/figures/screenspot_v2_element_type_point_accuracy_before_after.png`
-- Source-split before/after chart:
-  - `outputs/final_packaging/figures/screenspot_v2_source_split_point_accuracy_before_after.png`
+- ScreenSpot-v2 method comparison:
+  - [`screenspot_v2_before_after_and_method_comparison.png`](../outputs/final_packaging/figures/screenspot_v2_before_after_and_method_comparison.png)
+- Mind2Web Stage A pure vs hybrid:
+  - [`mind2web_stageA_pure_vs_hybrid.png`](../outputs/final_packaging/figures/mind2web_stageA_pure_vs_hybrid.png)
+- Mind2Web Stage B old vs rebuild headroom:
+  - [`mind2web_stageB_headroom_old_vs_hybrid_rebuild.png`](../outputs/final_packaging/figures/mind2web_stageB_headroom_old_vs_hybrid_rebuild.png)
+- VisualWebBench method comparison:
+  - [`visualwebbench_method_comparison.png`](../outputs/final_packaging/figures/visualwebbench_method_comparison.png)
 
-## Final Tables
+## Benchmark Output Directories
 
-- Core metrics summary table:
-  - `outputs/final_packaging/tables/screenspot_v2_core_metrics_summary.md`
-  - `outputs/final_packaging/tables/screenspot_v2_core_metrics_summary.csv`
-- Point-accuracy breakdown table:
-  - `outputs/final_packaging/tables/screenspot_v2_point_accuracy_breakdowns.md`
-  - `outputs/final_packaging/tables/screenspot_v2_point_accuracy_breakdowns.csv`
+- Mind2Web pure-visual Stage A:
+  - `outputs/mind2web_stageA_sft_localization_fixed/`
+- Mind2Web hybrid Stage A:
+  - `outputs/mind2web_stageA_sft_hybrid_candidates/`
+- Mind2Web rebuilt Stage B candidate pools:
+  - `outputs/mind2web_stageB_candidates_hybrid_stagea/`
+- Mind2Web rebuilt Stage B reranker:
+  - `outputs/mind2web_stageB_reranker_hybrid_stagea/`
+- Mind2Web rebuild comparison:
+  - `outputs/mind2web_stageB_rebuild_hybrid_stagea/`
+- Earlier weaker-Stage-A Stage B evidence:
+  - `outputs/mind2web_stageB_candidates/`
+  - `outputs/mind2web_stageB_candidates_headroom_expanded/`
+  - `outputs/mind2web_stageB_reranker_source_aware_supervision/`
+- ScreenSpot-v2 public baseline:
+  - `outputs/screenspot_v2_public_qwen2_5_vl_3b_point_baseline/`
+- ScreenSpot-v2 point-native:
+  - `outputs/screenspot_v2_eval_qwen2_5_vl_3b_point_native_decoupled/`
+- ScreenSpot-v2 dual-path verifier:
+  - `outputs/screenspot_v2_eval_qwen2_5_vl_3b_dual_path_verifier/`
+- VisualWebBench structured:
+  - `outputs/visualwebbench_eval_qwen2_5_vl_3b_model_resized/`
+- VisualWebBench point-native:
+  - `outputs/visualwebbench_eval_qwen2_5_vl_3b_point_native_decoupled/`
+- VisualWebBench dual-path verifier:
+  - `outputs/visualwebbench_eval_qwen2_5_vl_3b_dual_path_verifier/`
+- VisualWebBench Mind2Web hybrid transfer:
+  - `outputs/visualwebbench_eval_mind2web_stageA_hybrid_candidates/`
 
-## Key Historical Reports Used In The Final Story
+## Best Methods to Present
 
-- Proposal:
-  - `docs/gui_grounding_project_proposal.docx`
-- Qwen realignment:
-  - `docs/blueprint_realignment_qwen_backbone.md`
-- Qwen medium export quality:
-  - `docs/qwen_medium_candidate_export_and_quality_report.md`
-- Initial clean held-out eval:
-  - `docs/screenspot_v2_clean_heldout_eval.md`
-- Failure analysis:
-  - `docs/screenspot_v2_failure_analysis_and_prompt_refinement.md`
-- Full coordinate-refined rerun:
-  - `docs/screenspot_v2_full_rerun_coordinate_refinement.md`
-- Reward/reranker exploration:
-  - `docs/stage5_learned_reranker_results.md`
-  - `docs/stage5c_reranker_feature_upgrade.md`
-  - `docs/stage6a_dpo_style_preference_optimization.md`
-  - `docs/stage6a_5_preference_target_redesign.md`
+- Mind2Web default supervised baseline:
+  - hybrid screenshot + OCR/DOM candidate-aware Stage A
+- Mind2Web Stage B final interpretation:
+  - earlier weaker Stage A had real headroom
+  - rebuilt hybrid-stage-A reranking is not a robust default win
+- ScreenSpot-v2 strongest final method:
+  - dual-path candidate generation + lightweight verifier
+- VisualWebBench strongest default transfer method:
+  - point-native decoupled inference path
 
-## Packaging Manifest
+## Safe Final Claims
 
-- Generated packaging manifest:
-  - `outputs/final_packaging/packaging_manifest.json`
+Use language close to the following:
+
+1. Hybrid OCR/DOM candidate augmentation is critical for strong supervised GUI grounding when the benchmark exposes semantically informative candidate structure.
+2. Point-first grounding is a strong transferable inference strategy across held-out GUI benchmarks.
+3. Reward-based reranking helps when the baseline is weak enough to leave real recoverable headroom.
+4. Once strong supervision saturates most recoverable headroom, reranking gains become sparse and inconsistent.
+5. Candidate-aware methods do not transfer unchanged across mismatched benchmark protocols.
+
+## Claims to Avoid
+
+- Do not say pure screenshot supervision was already strong.
+- Do not say reranking universally improved the final strong baseline.
+- Do not say Mind2Web hybrid transfer generalizes unchanged to any GUI benchmark.
+- Do not frame the project as a full browser-agent system.
+
+## Primary Supporting Reports
+
+- Final report draft:
+  - [`final_project_report.md`](final_project_report.md)
+- Presentation outline:
+  - [`final_presentation_outline.md`](final_presentation_outline.md)
+- Quantitative standalone section:
+  - [`standalone_quantitative_evaluation_section.md`](standalone_quantitative_evaluation_section.md)
+- Mind2Web Stage A report:
+  - [`mind2web_stageA_hybrid_representation_strong_baseline.md`](mind2web_stageA_hybrid_representation_strong_baseline.md)
+- Mind2Web Stage B rebuild report:
+  - [`mind2web_stageB_rebuild_on_hybrid_stageA.md`](mind2web_stageB_rebuild_on_hybrid_stageA.md)
+- ScreenSpot-v2 public baseline report:
+  - [`public_baseline_reproduction_and_same_protocol_comparison.md`](public_baseline_reproduction_and_same_protocol_comparison.md)
+- ScreenSpot-v2 dual-path verifier report:
+  - [`dual_path_candidate_generation_and_lightweight_verifier.md`](dual_path_candidate_generation_and_lightweight_verifier.md)
+- VisualWebBench report:
+  - [`visualwebbench_supplementary_benchmark_analysis.md`](visualwebbench_supplementary_benchmark_analysis.md)
