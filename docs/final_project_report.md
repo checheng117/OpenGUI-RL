@@ -3,17 +3,28 @@
 CSC6129 Reinforcement Learning Final Project Report Draft  
 Student: Che Cheng
 
+Accuracy note for handoff: if any exact number in this draft conflicts with the later handoff materials, prefer [`docs/standalone_quantitative_evaluation_section.md`](standalone_quantitative_evaluation_section.md) and [`outputs/quantitative_metrics_suite/summary.json`](../outputs/quantitative_metrics_suite/summary.json), which were recomputed from saved evaluation artifacts on `2026-04-10`.
+
 ## Abstract
 
-This project studies instruction-conditioned GUI grounding as a reinforcement-learning-relevant multimodal decision problem: given a screenshot and a natural-language instruction, predict a UI action and localize the target element. The original plan emphasized supervised training plus verifiable-reward-driven reranking and preference optimization. That early path produced useful engineering artifacts and clarified the reward formulation, but it did not deliver the strongest empirical result. The project was later realigned to a Qwen-first multimodal backbone, with evaluation centered on clean held-out GUI grounding rather than legacy surrogate optimization. The decisive breakthrough came from failure analysis on ScreenSpot-v2: the model was already producing mostly parseable structured outputs, but many predictions were scored in the wrong coordinate frame. After explicitly predicting in the resized model-view frame and mapping coordinates back to the original screenshot, full held-out ScreenSpot-v2 point accuracy improved from `0.0849` to `0.7099` on `1272/1272` samples, with broad gains across desktop, web, and mobile. The final contribution is therefore an honest multimodal LLM engineering story: reward optimization remains part of the project framing and exploration, but the strongest final evidence is benchmark-driven debugging and coordinate-frame refinement for Qwen-first GUI grounding.
+This project studies instruction-conditioned GUI grounding as a single-step multimodal decision problem: given a screenshot and a natural-language instruction, predict the target UI element, click location, and action type. The original proposal emphasized a supervised baseline plus verifiable-reward-driven candidate reranking. That framing remained useful throughout the project, but the final evidence is more nuanced than a simple "RL always helps" story.
+
+Across the completed benchmarks, three findings emerged. First, on Mind2Web, pure screenshot-only supervision was not enough: after fixing a geometry-collapse bug, Stage A still reached only `0.0375` internal-validation point accuracy and `0.0061` mean IoU. Adding semantically informative OCR/DOM-style candidate augmentation transformed Stage A into a strong supervised baseline, reaching `0.7875` point accuracy and `0.7314` mean IoU internally, with cached official-subset point accuracy of `0.9500 / 0.8500 / 0.8947` on `test_task / test_website / test_domain`. Second, on ScreenSpot-v2, failure analysis revealed a coordinate-frame mismatch between the model-resized image and the original screenshot. Fixing that mismatch produced the first credible held-out baseline, after which a point-native decoupled inference path exceeded the reproduced public plain-Qwen baseline (`0.7736` vs `0.7563` point accuracy) and a dual-path verifier improved slightly further to `0.7791`. Third, supplementary transfer on VisualWebBench showed that point-first grounding transfers well (`0.8721` official choice accuracy vs `0.7888` for structured screenshot-only), but Mind2Web-style hybrid candidate-aware transfer does not transfer unchanged to an anonymous 8-box protocol (`0.2384` official choice accuracy).
+
+The final conclusion is therefore scoped and evidence-based: semantically informative candidate augmentation is critical when the benchmark exposes meaningful candidate structure; point-first grounding is a strong transferable inference strategy; reward-based reranking helps when the baseline leaves real candidate-pool headroom; but once strong supervision saturates most recoverable cases, reranking gains diminish sharply and cease to be a robust default improvement.
 
 ## 1. Introduction and Motivation
 
-Modern computer-use agents depend on a perception layer that can interpret screenshots, understand user intent, and ground the next action to the correct UI element. This project focuses on that single-step GUI grounding problem rather than long-horizon browser-agent execution. The goal is practical and measurable: take a screenshot plus instruction and predict a structured action object centered on `bbox_proposal`, `click_point`, and `action_type`.
+Modern browser and computer-use agents depend on a perception layer that can read a screenshot, understand an instruction, and ground the next action to the correct UI target. This project isolates that layer as a single-step GUI grounding problem rather than attempting full long-horizon web navigation. The core output contract is a structured action object containing `click_point`, `bbox_proposal`, and `action_type`.
 
-This is a strong reinforcement learning course project because the task admits a clean verifiable reward. If the model predicts the correct element, lands the click inside the target box, and outputs a valid action type, reward can be computed automatically. That makes the problem fit a contextual-bandit view of RL: the context is the screenshot and instruction, the action is the grounded UI action, and reward is derived from correctness and localization quality.
+This is a good reinforcement learning project because the task admits a clean verifiable reward. Once a target element and action annotation are available, correctness can be checked automatically through element match, click-inside-target, bounding-box overlap, action-type correctness, and formatting validity. That makes the task naturally fit a contextual-bandit-like formulation: context is the screenshot and instruction, action is the grounded UI action, and reward is deterministic.
 
-The final report is intentionally honest about the project arc. Early surrogate and reward-optimization stages existed and were useful, but the final strongest result came from a Qwen-first held-out evaluation pipeline and a debugging-led refinement to the coordinate system used for prediction and scoring.
+The original proposal asked two linked questions:
+
+1. How strong can a supervised multimodal GUI grounding baseline become?
+2. When does verifiable-reward-driven reranking still add value on top of that baseline?
+
+The finished project answers both questions, but not symmetrically. The strongest final positive result is not heavy RL or preference optimization. It is a combination of better representation, benchmark debugging, and stronger inference structure. Reward-based reranking remains scientifically important, but its benefits are conditional on residual candidate-pool headroom.
 
 ## 2. Problem Formulation and RL Framing
 
@@ -21,311 +32,232 @@ The final report is intentionally honest about the project arc. Early surrogate 
 
 For each example:
 
-- Context `x`: screenshot image `I` and instruction `u`
-- Action `a`: structured GUI action with `bbox_proposal`, `click_point`, and `action_type`
-- Reward `r`: deterministic function of spatial correctness and output validity
+- Context `x`: screenshot `I`, instruction `u`, and optional candidate cues `c`
+- Action `a`: grounded GUI action with `click_point`, `bbox_proposal`, and `action_type`
+- Reward `r`: deterministic score derived from spatial correctness and output validity
 
-This is naturally framed as a contextual bandit rather than a full sequential RL task. The project does not claim to solve long-horizon web navigation, memory, recovery from mistakes, or multi-step environment interaction. It isolates the grounding/action-prediction step that upstream browser agents rely on.
+This project intentionally stops at the single-step grounding layer. It does not claim to solve long-horizon planning, recovery from execution errors, or full browser-agent interaction loops.
 
 ### 2.2 Verifiable reward
 
-The project proposal defined reward using components such as:
+The reward framing from the proposal remained stable throughout the project:
 
 - element correctness
 - click-point inclusion
-- IoU overlap with the target box
+- IoU overlap
 - action-type correctness
 - penalties for malformed outputs
 
-This reward formulation motivated the early reranking and preference-learning stages. Even though those stages were not the final main result, they remain important because they define the RL relevance of the project and shaped the evaluation mindset used later in held-out analysis.
+That reward was used directly in Mind2Web Stage B candidate labeling and reranker training. It also shaped the project's evaluation style more broadly: results were assessed not just by parseability, but by whether outputs were spatially correct and recoverable.
+
+### 2.3 Why heavy RL was not the final strongest result
+
+The final evidence does not support a claim that stronger RL machinery was the main source of performance. Two reasons are clear from the completed experiments:
+
+1. The largest gains came from fixing upstream representation and inference problems: Mind2Web hybrid augmentation and ScreenSpot-v2 coordinate-frame correction plus point-native decoding.
+2. Reranking helps only when there is enough headroom in the candidate pool. Once Stage A becomes strong enough to solve most recoverable cases directly, the reward model has too few true recovery opportunities to remain a reliable default improvement.
+
+So the RL framing is honest and relevant, but the finished story is about when verifiable reward matters, not about claiming that more RL always wins.
 
 ## 3. Datasets and Benchmarks
 
-### 3.1 Training and development data
+| Benchmark | Role in final story | What it tested |
+| --- | --- | --- |
+| Mind2Web | Primary blueprint benchmark | Stage A supervision, hybrid candidate augmentation, Stage B candidate generation, deterministic reward, learned reranking, and headroom analysis across `test_task`, `test_website`, and `test_domain` |
+| ScreenSpot-v2 | Primary held-out benchmark | Cross-platform GUI grounding under a clean same-protocol evaluation, including baseline reproduction, coordinate-frame debugging, point-native inference, and dual-path verification |
+| VisualWebBench | Supplementary transfer benchmark | Whether the main Mind2Web and ScreenSpot-v2 findings transfer to a broader grounding-compatible benchmark with an anonymous 8-box protocol |
 
-The broader project used Mind2Web-style screenshot-instruction-action data for early supervised and candidate-generation work. This supported:
+Mind2Web anchored the proposal-facing supervised-plus-reward story. ScreenSpot-v2 provided the cleanest held-out evaluation of transfer-ready grounding behavior. VisualWebBench served as the supplementary check on what transfers, what saturates, and what fails under a protocol mismatch.
 
-- Stage A supervised baseline experiments
-- candidate generation
-- reward-scored reranking experiments
-- Qwen structured-output validation on real screenshot tasks
+## 4. Methods
 
-### 3.2 Primary final benchmark
+### 4.1 Stage A pure-visual supervised baseline
 
-The final primary benchmark is **ScreenSpot-v2 clean held-out evaluation**. This became the authoritative benchmark for the final package because it is a clean, explicit grounding benchmark with held-out desktop, web, and mobile examples. The final report therefore treats ScreenSpot-v2 as the strongest evidence source for the final claim.
+The first serious Mind2Web Stage A path used screenshot-only supervision. A geometry-collapse issue was identified and fixed, so the final pure-visual comparison is not against a broken baseline. Even after that fix, however, Stage A remained weak on actual localization. This mattered because it established that pure screenshot supervision was not enough for the project’s original claim.
 
-Dataset facts used in the final benchmark:
+### 4.2 Stage A hybrid candidate-aware baseline
 
-- dataset source: `lscpku/ScreenSpot-v2`
-- split: `test`
-- total evaluated samples: `1272`
-- platform counts:
-  - desktop: `334`
-  - mobile: `501`
-  - web: `437`
-- element types:
-  - text: `718`
-  - icon: `554`
+The decisive Mind2Web Stage A improvement was to augment the screenshot with compact OCR/DOM-style candidate anchors and supervise an auxiliary `candidate_slot` target. The important detail is not merely "more tokens" or "more slots." The important detail is that the candidate structure carried semantically meaningful evidence:
 
-## 4. Method Overview
+- DOM bounding boxes
+- compact attribute text
+- recovered cleaned-HTML node text
+- deterministic heuristic ranking of candidate anchors
 
-### 4.1 Final primary method
+At evaluation time, a valid predicted candidate slot anchored the grounded element, box, and click point. This created the first strong supervised grounding baseline in the repository.
 
-The final primary method is:
+### 4.3 Stage B candidate generation, deterministic reward, and reranking
 
-**Qwen-first GUI grounding with coordinate-frame refinement**
+Stage B kept the same structured action contract and added:
 
-Core prediction semantics:
+1. small top-k candidate pools exported from the Stage A model
+2. deterministic verifiable reward labels per candidate
+3. a lightweight learned reranker over auditable engineered candidate features
 
-- `bbox_proposal`
-- `click_point`
-- `action_type`
+This stage was first run on weaker Stage A foundations and later rebuilt on top of the strong hybrid Stage A baseline. That rebuild is crucial because it directly tests whether reward-based reranking still helps after strong supervision closes most of the gap.
 
-The Qwen backbone receives a screenshot and instruction and emits structured JSON-like predictions. The critical refinement is that the model predicts coordinates in the resized model-view frame used internally by the vision-language model, and those coordinates are then mapped back to the original screenshot frame before evaluation.
+### 4.4 ScreenSpot-v2 Qwen-first inference path
 
-### 4.2 Why this refinement matters
+The ScreenSpot-v2 line evolved in three steps:
 
-If the model internally reasons over a resized image but outputs coordinates interpreted as if they belonged to the original screenshot, predictions can appear catastrophically wrong despite being semantically sensible relative to the model-view image. This project discovered that this mismatch, not generic output instability, was the dominant reason for weak initial held-out results.
+1. coordinate-frame refinement
+2. point-native decoupled decoding
+3. dual-path candidate generation plus lightweight verifier
 
-## 5. Early Stages and Negative Findings
+The coordinate-frame fix was not a new model. It corrected a mismatch between the resized image frame used by Qwen internally and the original screenshot frame used for scoring. Once that issue was fixed, the project could meaningfully compare stronger inference strategies on held-out data. The point-native path then made click prediction primary rather than treating it as a byproduct of box decoding, and the dual-path verifier combined structured and point-native candidates under a lightweight selection rule.
 
-The early project stages are important historical context and should not be erased.
+## 5. Main Experimental Results
 
-### 5.1 CLIP-grid supervised baseline
+### 5.1 Mind2Web Stage A: pure visual was insufficient, hybrid was the breakthrough
 
-The first executable baseline used a CLIP-grid surrogate path because Qwen runtime was not yet stable in the local environment. This baseline established a runnable training/evaluation stack, but the representation was coarse and not adequate as a final grounding solution.
+The finished Stage A comparison is the clearest positive result on Mind2Web.
 
-Representative debug metrics from the saved Stage 3 report:
+| Setting | Pure visual point acc | Hybrid point acc | Pure visual mean IoU | Hybrid mean IoU |
+| --- | ---: | ---: | ---: | ---: |
+| Internal validation | `0.0375` | `0.7875` | `0.0061` | `0.7314` |
+| `test_task` cached subset | `0.0000` | `0.9500` | `0.0057` | `0.9500` |
+| `test_website` cached subset | `0.0000` | `0.8500` | `0.0031` | `0.8275` |
+| `test_domain` cached subset | `0.0526` | `0.8947` | `0.0198` | `0.8947` |
 
-- `val_action_acc = 0.75`
-- `val_grid_acc = 0.50`
-- `val_point_acc = 0.00`
-- `val_mean_iou = 0.0071`
+This is not a marginal improvement. It is the transition from an inadequate supervised baseline to a credible strong baseline.
 
-These numbers were useful for pipeline validation but not persuasive as a final project result.
+![Mind2Web Stage A comparison](../outputs/final_packaging/figures/mind2web_stageA_pure_vs_hybrid.png)
 
-### 5.2 Reward-based reranking exploration
+### 5.2 Mind2Web Stage B on weaker Stage A: reranking helped when headroom existed
 
-The project then explored verifiable-reward-driven candidate reranking and lightweight preference optimization on CLIP-grid-generated candidate pools.
+Before rebuilding Stage B on top of the hybrid Stage A baseline, the best source-aware reranker on expanded pools produced consistent positive reward gains on the official split pools:
 
-What the saved artifacts show:
+- `test_task`: `+0.0055`
+- `test_website`: `+0.0211`
+- `test_domain`: `+0.0202`
 
-- Stage 5 learned reranker on a small pool produced **no measurable improvement**
-- Stage 5c feature upgrades yielded only **very small positive gains**
-  - full-pool mean reward gain: `+0.0001657`
-  - headroom-subset mean reward gain: `+0.0005340`
-- Step 6A DPO-style preference optimization did **not** beat Step 5c
-- Step 6A.5 preference-target redesign also did **not** beat Step 5c
+Those gains were not huge, but they were real. They established the core conditional claim that reward-based reranking can help when the supervised baseline is weak enough to leave meaningful recoverable headroom.
 
-Interpretation:
+### 5.3 Mind2Web Stage B rebuild on hybrid Stage A: headroom shrank and default gains disappeared
 
-- reward optimization was a valid and RL-relevant exploration path
-- the reranking experiments were informative about data quality and headroom
-- but they did not become the strongest empirical claim of the final project
+Rebuilding Stage B on top of the strong hybrid Stage A changed the picture sharply.
 
-This is why the final package does not overstate reward optimization success.
+| Split | Old headroom frac | Rebuild headroom frac | Old reward gain | Rebuild reward gain |
+| --- | ---: | ---: | ---: | ---: |
+| `test_task` | `0.2000` | `0.0500` | `+0.0055` | `-0.0400` |
+| `test_website` | `0.2000` | `0.1500` | `+0.0211` | `-0.2588` |
+| `test_domain` | `0.1579` | `0.0526` | `+0.0202` | `+0.0737` |
 
-## 6. Qwen-First Realignment
+Across the official split pools together:
 
-The project was later realigned to the original multimodal objective: use a real Qwen vision-language model as the primary path rather than keeping the surrogate backbone as the centerpiece.
+- headroom pools dropped from `11 / 59` to `5 / 59`
+- mean split reward moved from `1.7496` for hybrid first-choice to `1.6745` after reranking
 
-Key milestones from the saved repository evidence:
+The rebuild therefore answers the proposal question directly: reranking still has residual value in narrow cases, but it is no longer a robust default improvement once Stage A already resolves most recoverable cases.
 
-- Qwen-first runtime path was unblocked using the local cached model plus mirror-backed runtime support
-- real Qwen single-sample inference completed successfully
-- a medium-scale Qwen candidate export on `50` real Mind2Web train samples completed with:
-  - `50/50` successful sample-level runs
-  - `200/200` parseable structured outputs
-  - `199/200` valid bbox outputs
-  - `199/200` valid click-point outputs
+![Mind2Web Stage B comparison](../outputs/final_packaging/figures/mind2web_stageB_headroom_old_vs_hybrid_rebuild.png)
 
-This was important because it showed the Qwen-first path was operationally stable enough to support held-out evaluation.
+### 5.4 ScreenSpot-v2: coordinate fix, point-native inference, and a modest dual-path gain
 
-## 7. Held-Out Failure Analysis
+ScreenSpot-v2 produced the strongest held-out inference story in the project.
 
-### 7.1 Initial full ScreenSpot-v2 held-out result
+The turning point was the coordinate-frame mismatch discovery. The same model that initially achieved only `0.0849` point accuracy rose to `0.7099` after the coordinate-frame refinement. That created a credible structured baseline. From there, stronger inference structure improved further:
 
-The first authoritative full ScreenSpot-v2 held-out run used Qwen-first evaluation but interpreted outputs directly in the original screenshot frame.
-
-Overall baseline result:
-
-| Metric | Value |
-| --- | ---: |
-| Evaluated samples | 1272 |
-| Point accuracy | 0.0849 |
-| IoU@0.5 | 0.0102 |
-| Mean IoU | 0.0196 |
-| Action-type validity | 0.9992 |
-| Parseable output rate | 0.9992 |
-| Valid bbox rate | 0.9992 |
-| Valid click-point rate | 0.9992 |
-
-This result is crucial because it revealed a mismatch between **structural output quality** and **grounding quality**. The model was almost always producing parseable outputs, but the spatial predictions were usually wrong.
-
-### 7.2 Why the baseline looked bad
-
-The failure analysis showed:
-
-- only `1/1272` prediction was non-parseable
-- most errors were parseable but spatially wrong
-- desktop was much better than web/mobile:
-  - desktop point accuracy: `0.3084`
-  - mobile point accuracy: `0.0060`
-  - web point accuracy: `0.0046`
-
-This asymmetry strongly suggested a coordinate-scale issue rather than total model failure. The saved failure analysis then quantified systematic coordinate shrinkage:
-
-- mobile median click ratios around `0.38-0.41`
-- web median click ratios around `0.37`
-- desktop ratios larger but still compressed
-
-The decisive counterfactual test was even stronger:
-
-- if the saved baseline predictions were treated as belonging to the Qwen resized-image frame and mapped back to the original image size, overall point accuracy would rise from `0.0849` to `0.6863`
-- under the same reinterpretation, IoU@0.5 would rise from `0.0102` to `0.1321`
-
-That analysis identified the dominant failure mode.
-
-## 8. Coordinate-Frame Refinement
-
-The final refinement was intentionally narrow:
-
-1. tell Qwen to emit coordinates in the **resized model-view frame**
-2. parse and clamp coordinates in that frame
-3. map them back to the **original screenshot frame** before scoring/export
-
-This change preserved the rest of the pipeline:
-
-- no new model training
-- no reranker redesign
-- no switch away from Qwen
-- no pipeline replacement
-
-### 8.1 Diagnostic reevaluation before the full rerun
-
-Balanced `180`-sample reevaluation:
-
-- point accuracy: `0.1222 -> 0.6833`
-- IoU@0.5: `0.0167 -> 0.1778`
-- mean IoU: `0.0327 -> 0.2259`
-
-Balanced `360`-sample reevaluation:
-
-- point accuracy: `0.1194 -> 0.6722`
-- IoU@0.5: `0.0139 -> 0.1722`
-- mean IoU: `0.0298 -> 0.2281`
-
-Those results justified a full benchmark rerun.
-
-## 9. Final Results
-
-The strongest final result is the full ScreenSpot-v2 rerun with coordinate-frame refinement enabled via [`configs/eval/screenspot_v2_qwen2_5_vl_3b_model_resized_full.yaml`](../configs/eval/screenspot_v2_qwen2_5_vl_3b_model_resized_full.yaml).
-
-### 9.1 Overall benchmark result
-
-| Metric | Before | After | Delta |
+| Method | Point accuracy | IoU@0.5 | Mean IoU |
 | --- | ---: | ---: | ---: |
-| Evaluated samples | 1272 | 1272 | 0 |
-| Point accuracy | 0.0849 | 0.7099 | +0.6250 |
-| IoU@0.5 | 0.0102 | 0.1682 | +0.1580 |
-| Mean IoU | 0.0196 | 0.2404 | +0.2209 |
-| Action-type validity | 0.9992 | 1.0000 | +0.0008 |
-| Parseable output rate | 0.9992 | 1.0000 | +0.0008 |
-| Valid bbox rate | 0.9992 | 1.0000 | +0.0008 |
-| Valid click-point rate | 0.9992 | 1.0000 | +0.0008 |
+| Reproduced public plain-Qwen baseline | `0.7563` | `0.0519` | `0.1327` |
+| Structured coordinate-refined path | `0.7099` | `0.1682` | `0.2404` |
+| Point-native decoupled path | `0.7736` | `0.0967` | `0.1912` |
+| Dual-path verifier | `0.7791` | `0.1722` | `0.2520` |
 
-![Overall before/after metrics](../outputs/final_packaging/figures/screenspot_v2_overall_before_after.png)
+The right comparison here is not just "before vs after bug fix." The stronger final claim is that point-native grounding exceeded the reproduced public same-protocol baseline, and dual-path verification improved slightly further.
 
-### 9.2 Platform breakdown
+![ScreenSpot-v2 comparison](../outputs/final_packaging/figures/screenspot_v2_before_after_and_method_comparison.png)
 
-| Platform | Point Acc Before | Point Acc After |
-| --- | ---: | ---: |
-| desktop | 0.3084 | 0.6976 |
-| mobile | 0.0060 | 0.7445 |
-| web | 0.0046 | 0.6796 |
+### 5.5 VisualWebBench: point-first transfer held, hybrid candidate transfer did not
 
-![Platform point accuracy](../outputs/final_packaging/figures/screenspot_v2_platform_point_accuracy_before_after.png)
+VisualWebBench was intentionally supplementary and evaluation-only. No benchmark-specific tuning was added. The goal was to test transfer and scope.
 
-### 9.3 Element-type breakdown
+| Method | Official choice acc | Point acc | Mean IoU |
+| --- | ---: | ---: | ---: |
+| Structured screenshot-only | `0.7888` | `0.6453` | `0.3206` |
+| Point-native decoupled | `0.8721` | `0.7946` | `0.3435` |
+| Dual-path verifier | `0.8682` | `0.7965` | `0.3312` |
+| Mind2Web Stage A hybrid transfer | `0.2384` | `0.2384` | `0.2384` |
 
-| Element type | Point Acc Before | Point Acc After |
-| --- | ---: | ---: |
-| text | 0.0947 | 0.8245 |
-| icon | 0.0722 | 0.5614 |
+Three important things happened here:
 
-![Element-type point accuracy](../outputs/final_packaging/figures/screenspot_v2_element_type_point_accuracy_before_after.png)
+1. Point-native transfer remained strong.
+2. Dual-path no longer beat point-native overall; the remaining combination headroom was tiny.
+3. The Mind2Web hybrid checkpoint transferred poorly because VisualWebBench exposes eight anonymous option boxes rather than semantically informative OCR/DOM candidates.
 
-### 9.4 Key source splits
+![VisualWebBench comparison](../outputs/final_packaging/figures/visualwebbench_method_comparison.png)
 
-| Source | Point Acc Before | Point Acc After |
-| --- | ---: | ---: |
-| windows | 0.6289 | 0.7547 |
-| macos | 0.0204 | 0.6939 |
-| ios | 0.0042 | 0.7353 |
-| android | 0.0047 | 0.8057 |
+## 6. Cross-Benchmark Synthesis
 
-![Key source-split point accuracy](../outputs/final_packaging/figures/screenspot_v2_source_split_point_accuracy_before_after.png)
+### 6.1 Strong positive findings
 
-### 9.5 Main interpretation
+**Hybrid OCR/DOM candidate augmentation works on Mind2Web when the candidate structure is informative.**  
+This is one of the strongest results in the repository. The hybrid Stage A baseline is not merely better than pure visual; it changes the scientific conclusion from "Stage A is weak" to "Stage A can be strong when the representation exposes semantically useful candidate structure."
 
-The final results support a precise conclusion:
+**Point-first grounding is a strong transferable inference strategy.**  
+ScreenSpot-v2 and VisualWebBench both support this. On ScreenSpot-v2, point-native decoding improved from the structured coordinate-refined path to `0.7736` point accuracy and exceeded the reproduced public baseline. On VisualWebBench, point-native raised official choice accuracy from `0.7888` to `0.8721`.
 
-- the weak initial held-out performance was caused mainly by **coordinate-frame mismatch**
-- the model was already structurally stable enough for evaluation
-- once coordinates were emitted and interpreted in the correct frame, held-out grounding quality improved dramatically
+### 6.2 Scoped or conditional positive findings
 
-This is a stronger and more defensible project claim than saying reward optimization alone solved the task.
+**Reward-based reranking helps when headroom exists.**  
+Earlier Mind2Web Stage B runs on weaker Stage A foundations produced real gains across all three official split pools. That result should be kept, but it should be described conditionally rather than universally.
 
-## 10. Discussion and Limitations
+**Dual-path combination still helps relative to weaker baselines.**  
+On ScreenSpot-v2, dual-path verification improved over both the structured and point-native single paths, but only modestly over point-native (`0.7736 -> 0.7791`). On VisualWebBench, dual-path improved clearly over structured screenshot-only, but no longer exceeded point-native overall. This is exactly what a saturated-headroom story predicts.
 
-### 10.1 What the project does show
+### 6.3 Important negative findings
 
-The final package shows that:
+**Pure visual Stage A was not enough on Mind2Web.**  
+This matters because it falsified the easy version of the proposal. A screenshot-only supervised pipeline did not become strong simply by training longer or fixing geometry.
 
-- a Qwen-first multimodal grounding system can be packaged into a clean held-out benchmark pipeline
-- structured GUI action outputs can be made highly reliable
-- careful failure analysis can uncover a dominant bug-like failure mode with benchmark-scale consequences
-- debugging the coordinate frame can matter more than adding extra optimization complexity
+**Reranking gains diminish sharply once Stage A becomes strong.**  
+The rebuild on hybrid Stage A is the key evidence: official headroom shrank from `11/59` pools to `5/59`, and reranking lowered average official-split reward overall.
 
-### 10.2 What the project does not show
+**Candidate-aware methods do not transfer unchanged across mismatched benchmark protocols.**  
+Mind2Web-style hybrid transfer failed on VisualWebBench because the underlying candidate semantics changed. The lesson is not that candidate augmentation is unhelpful; it is that the gain depends on semantically informative candidate structure rather than arbitrary slot prompting.
 
-The final package does **not** claim:
+### 6.4 Final claim language
 
-- full long-horizon web-agent competence
-- success on sequential browser execution
-- that reward optimization became the strongest final empirical contributor
-- that the coordinate refinement has been validated across every possible GUI benchmark
+The safest final wording is:
 
-### 10.3 Why reward optimization still belongs in the story
+1. Hybrid OCR/DOM candidate augmentation is critical for strong supervised GUI grounding when the benchmark exposes semantically informative candidate structure.
+2. Point-first grounding is a strong and transferable inference strategy across held-out GUI benchmarks.
+3. Reward-based reranking helps substantially when the baseline is weak or imperfect enough to leave real candidate-pool headroom.
+4. Once strong supervision saturates most recoverable headroom, reranking gains become sparse and inconsistent.
+5. Candidate-aware methods do not transfer unchanged across benchmarks with mismatched candidate protocols.
 
-Reward optimization remains part of the story for three reasons:
+## 7. Discussion, Negative Findings, and Limits
 
-1. it grounds the project in RL-relevant verifiable-reward reasoning
-2. it shaped the candidate/action schema and evaluation discipline
-3. it provided negative results that clarified where empirical leverage was and was not found
+### 7.1 What the project did not show
 
-That is valuable in a course project. Honest negative findings are part of the final result.
+The finished project does not support the following claims:
 
-## 11. Conclusion
+- that pure screenshot supervision alone is a strong general solution
+- that reranking gives universal gains on top of a strong baseline
+- that Mind2Web-style candidate-aware checkpoints transfer unchanged to any GUI benchmark
+- that the project solves long-horizon browser automation
 
-This project began as a multimodal GUI grounding system with verifiable-reward-driven improvement. Early surrogate and reranking stages established the RL framing and produced useful engineering infrastructure, but they did not yield the strongest empirical gain. The project then returned to the intended Qwen-first path, built a stable held-out evaluation pipeline, and discovered that the main obstacle on ScreenSpot-v2 was coordinate-frame mismatch rather than general output instability. Fixing that mismatch transformed full held-out performance from weak to strong: point accuracy improved from `0.0849` to `0.7099` on `1272` clean held-out samples, with especially large gains on web and mobile. The final project contribution is therefore a benchmark-driven multimodal engineering result with explicit RL relevance, honest negative findings, and a clear debugging-led breakthrough.
+### 7.2 Why the project still aligns with the original proposal
 
-## References and Key Artifacts
+The proposal asked for a supervised baseline, a verifiable reward, a reranking mechanism, and cross-benchmark evaluation. All of those were completed. What changed is the conclusion:
 
-Primary repo artifacts used for this final report:
+- the strongest baseline required hybrid candidate-aware supervision on Mind2Web
+- the strongest held-out inference results came from coordinate-aware and point-first Qwen inference on ScreenSpot-v2
+- reranking helped in the earlier, weaker-baseline regime but saturated after strong supervision
 
-- [`docs/gui_grounding_project_proposal.docx`](./gui_grounding_project_proposal.docx)
-- [`docs/stage5_learned_reranker_results.md`](./stage5_learned_reranker_results.md)
-- [`docs/stage5c_reranker_feature_upgrade.md`](./stage5c_reranker_feature_upgrade.md)
-- [`docs/stage6a_dpo_style_preference_optimization.md`](./stage6a_dpo_style_preference_optimization.md)
-- [`docs/stage6a_5_preference_target_redesign.md`](./stage6a_5_preference_target_redesign.md)
-- [`docs/qwen_medium_candidate_export_and_quality_report.md`](./qwen_medium_candidate_export_and_quality_report.md)
-- [`docs/screenspot_v2_clean_heldout_eval.md`](./screenspot_v2_clean_heldout_eval.md)
-- [`docs/screenspot_v2_failure_analysis_and_prompt_refinement.md`](./screenspot_v2_failure_analysis_and_prompt_refinement.md)
-- [`docs/screenspot_v2_full_rerun_coordinate_refinement.md`](./screenspot_v2_full_rerun_coordinate_refinement.md)
+That is still a faithful realization of the proposal. It is simply an honest one.
 
-Authoritative final benchmark artifacts:
+### 7.3 Scope limits
 
-- [`outputs/screenspot_v2_eval_qwen2_5_vl_3b/evaluation_summary.json`](../outputs/screenspot_v2_eval_qwen2_5_vl_3b/evaluation_summary.json)
-- [`outputs/screenspot_v2_eval_qwen2_5_vl_3b_model_resized/evaluation_summary.json`](../outputs/screenspot_v2_eval_qwen2_5_vl_3b_model_resized/evaluation_summary.json)
-- [`outputs/screenspot_v2_eval_qwen2_5_vl_3b_model_resized/comparison_vs_baseline.json`](../outputs/screenspot_v2_eval_qwen2_5_vl_3b_model_resized/comparison_vs_baseline.json)
+- The Mind2Web official split comparisons are pilot-sized pools and cached subset readouts rather than a full-scale paper-style benchmark sweep.
+- The project studies single-step grounding, not complete agent execution.
+- VisualWebBench was used as a supplementary transfer analysis, not as a new training target.
+
+None of these limits invalidate the conclusions above, but they do define their scope.
+
+## 8. Conclusion
+
+This project began as a proposal about multimodal GUI grounding with verifiable reward optimization and ended with a sharper, more defensible story. On Mind2Web, semantically informative OCR/DOM candidate augmentation was the critical ingredient for a strong supervised baseline. On ScreenSpot-v2, benchmark-driven debugging and point-first decoding produced the strongest held-out transfer results, culminating in a dual-path verifier at `0.7791` point accuracy. On VisualWebBench, point-first transfer held up, reranking-style gains saturated quickly, and Mind2Web-style candidate-aware transfer failed under an anonymous 8-box protocol.
+
+The final synthesis is therefore not "reward optimization wins everywhere." It is more useful than that: strong supervision and strong inference structure do most of the heavy lifting, verifiable reward helps when headroom is real, and candidate-aware methods only transfer when their candidate semantics transfer too.

@@ -14,6 +14,7 @@ from gui_grounding.evaluation.metrics import (
     best_of_k_improvement,
     compute_all_metrics,
     element_accuracy,
+    invalid_format_rate,
     iou_at_threshold,
     mean_normalized_click_l1,
     mean_iou,
@@ -103,6 +104,31 @@ class TestMeanNormalizedClickL1:
             image_sizes=[(100, 50)],
         )
         assert err == pytest.approx(0.375)
+
+
+class TestInvalidFormatRate:
+    def test_zero_when_all_predictions_are_valid(self):
+        rate = invalid_format_rate(
+            pred_bboxes=[(0, 0, 10, 10)],
+            pred_points=[(5, 5)],
+            image_sizes=[(20, 20)],
+        )
+        assert rate == pytest.approx(0.0)
+
+    def test_counts_missing_predictions_as_invalid(self):
+        rate = invalid_format_rate(
+            pred_bboxes=[None, (0, 0, 10, 10)],
+            pred_points=[None, (5, 5)],
+            image_sizes=[(20, 20), (20, 20)],
+        )
+        assert rate == pytest.approx(0.5)
+
+    def test_flags_out_of_bounds_clicks(self):
+        rate = invalid_format_rate(
+            pred_points=[(25, 5)],
+            image_sizes=[(20, 20)],
+        )
+        assert rate == pytest.approx(1.0)
 
 
 class TestRerankingMetrics:
