@@ -2,27 +2,33 @@
 
 **Cross-Website GUI Grounding with Verifiable Reward Optimization**
 
-OpenGUI-RL is a scoped reinforcement-learning-inspired framework for instruction-conditioned GUI grounding in computer-use agents.
+OpenGUI-RL is a research-engineering project for instruction-conditioned GUI grounding in computer-use agents, framed as a single-step contextual-bandit decision with verifiable reward.
 
 <p align="center">
   <img src="assets/figures/opengui_rl_pipeline.png" alt="OpenGUI-RL pipeline" width="96%">
 </p>
 
-<p align="center"><em>Pipeline overview: a computer-use click failure is isolated as a one-step GUI grounding decision, then studied with candidate-aware supervision, reward-based reranking, and point-native / dual-path transfer inference.</em></p>
+<p align="center"><em>A wrong-click failure is isolated as one-step GUI grounding, then studied through candidate-aware supervision, reward-based reranking, and point-native / dual-path transfer inference.</em></p>
 
 ## Why This Matters
 
-Computer-use assistants can often understand a user instruction at a coarse semantic level and still fail at the first executable step: clicking the wrong UI element. This repository studies that bottleneck directly. It does not try to solve full browser automation; it isolates the perception-to-action grounding layer behind computer-use agents.
+Computer-use assistants can understand an instruction and still fail at the first executable step: clicking the wrong UI element. OpenGUI-RL studies that bottleneck directly by isolating the perception-to-action grounding layer rather than claiming to solve full browser automation.
 
-The project frames GUI grounding as a single-step verifiable decision problem. Given a screenshot and a natural-language instruction, the system predicts a structured GUI action, such as a target element, click point, bounding box, and action type. A deterministic reward checks whether the prediction matches the annotated target.
+Given a screenshot and a natural-language instruction, the system predicts a structured GUI action: target element, click point, bounding box, and action type. A deterministic verifier scores the action against the annotated target.
 
 ## What Is Implemented
 
-- **Candidate-aware supervised grounding** on Mind2Web, where OCR/DOM-style candidate cues are serialized as structured context for Qwen2.5-VL.
-- **Reward-labeled candidate generation and reranking** for Stage B, including first-choice, oracle best-of-\(k\), and learned reranker analyses.
-- **Point-native inference** for held-out GUI grounding, where click prediction is the primary output.
-- **Dual-path verification** that combines point-native and structured support candidates with a lightweight deterministic selector.
-- **Evaluation and analysis** across Mind2Web, ScreenSpot-v2, and VisualWebBench, with emphasis on headroom and transfer boundaries.
+- **Stage A: candidate-aware supervised grounding** with screenshot, instruction, and OCR/DOM-style candidate cues.
+- **Stage B: reward-labeled candidate generation and reranking** with first-choice, oracle best-of-\(k\), and learned reranker analysis.
+- **Held-out transfer inference** with point-native decoding and a lightweight dual-path verifier.
+- **Benchmark analysis** across Mind2Web, ScreenSpot-v2, and VisualWebBench, focused on headroom and protocol-sensitive transfer.
+
+## Main Findings
+
+- **Representation first.** On Mind2Web, semantically meaningful OCR/DOM candidate cues dominate pure screenshot-only supervision.
+- **Reward-based reranking is conditional.** It helps when the candidate pool still contains recoverable alternatives, but gains shrink once Stage A grounding is strong.
+- **Point-native inference transfers well.** On held-out GUI grounding benchmarks, making click prediction primary transfers more reliably than box-first decoding.
+- **Transfer is protocol-sensitive.** Candidate-aware methods depend on meaningful candidate protocols and do not transfer unchanged to anonymous option-box settings such as VisualWebBench.
 
 ## What Is Not In Scope
 
@@ -36,22 +42,13 @@ The project frames GUI grounding as a single-step verifiable decision problem. G
 
 The project uses a contextual-bandit-style formulation:
 
-| RL component | In this project |
-| --- | --- |
-| Context / state | Screenshot, instruction, and optional OCR/DOM candidate cues. |
-| Action | Structured GUI action: selected element, click point, bounding box, and action type. |
-| Reward | Deterministic verifiable score from element match, click-inside-target, IoU, action-type match, and invalid-format penalties. |
-| Transition | Single-step episode. Evaluation stops after scoring the prediction. |
-| Objective | Improve expected one-step reward under the scoped grounding decision layer. |
+- **Context / state:** screenshot, instruction, and optional OCR/DOM candidate cues.
+- **Action:** structured GUI action with selected element, click point, bounding box, and action type.
+- **Reward:** deterministic verifiable score from element match, click-inside-target, IoU, action-type match, and invalid-format penalties.
+- **Transition:** single-step episode; evaluation stops after scoring the prediction.
+- **Objective:** improve expected one-step reward under the scoped grounding decision layer.
 
 This preserves the RL ingredients that matter for this project while avoiding confounds from full browser dynamics. Reward is used to label candidates, build preference pairs, estimate best-of-\(k\) headroom, and test whether reward-based selection improves the first-stage policy output.
-
-## Main Findings
-
-- **Representation first.** On Mind2Web, semantically meaningful OCR/DOM candidate cues dominate pure screenshot-only supervision.
-- **Reward-based reranking is conditional.** It helps when the candidate pool still contains recoverable alternatives, but gains shrink once Stage A grounding is strong.
-- **Point-native inference transfers well.** On held-out GUI grounding benchmarks, making click prediction primary transfers more reliably than box-first decoding.
-- **Transfer is protocol-sensitive.** Candidate-aware methods depend on meaningful candidate protocols and do not transfer unchanged to anonymous option-box settings such as VisualWebBench.
 
 ## Repository Structure
 
@@ -62,7 +59,7 @@ This preserves the RL ingredients that matter for this project while avoiding co
 ├── configs/                 # data, model, training, evaluation, and demo configs
 ├── data/                    # placeholder directories only; datasets are not redistributed
 ├── data_examples/           # tiny synthetic examples of expected record formats
-├── docs/                    # public documentation and archived experiment notes
+├── docs/                    # external-facing scope, data, and reproduction notes
 ├── notebooks/               # lightweight output-cleared sanity-check notebooks
 ├── scripts/                 # command-line entry points for preparation, training, eval
 ├── src/gui_grounding/       # package code: data, models, reward, training, evaluation
@@ -165,18 +162,6 @@ Small public artifacts are available in:
 - Main training runs use a single seed due to compute limits, so small deltas should be interpreted cautiously.
 - ScreenSpot-Pro was proposed as an optional stress test but was not completed.
 - Candidate-aware grounding depends on meaningful OCR/DOM candidate structure and does not transfer unchanged to anonymous candidate protocols.
-
-## Citation
-
-```bibtex
-@misc{cheng2026openguirl,
-  title        = {OpenGUI-RL: Cross-Website GUI Grounding with Verifiable Reward Optimization},
-  author       = {Cheng, Che and Yang, Hongrong and Xie, Qianyu},
-  year         = {2026},
-  howpublished = {Course project repository},
-  url          = {https://github.com/checheng117/OpenGUI-RL}
-}
-```
 
 ## Acknowledgments
 
