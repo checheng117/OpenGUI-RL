@@ -8,6 +8,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import gc
 import hashlib
 import json
 import logging
@@ -19,10 +20,13 @@ from pathlib import Path
 from typing import Any, NoReturn
 
 from PIL import Image
+import torch
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
+from gui_grounding.constants import PROCESSED_DATA_DIR
+from gui_grounding.data.candidate_representation import build_candidate_prompt_context
 from gui_grounding.data.mind2web_dataset import Mind2WebDataset
 from gui_grounding.data.schemas import BBox, GroundingSample
 from gui_grounding.evaluation.collapse_diagnostics import compute_prediction_collapse_diagnostics
@@ -274,6 +278,62 @@ def _load_manifest_eval_samples(path: str | Path) -> tuple[str, list[GroundingSa
     return split_name, samples
 
 
+def _hydrate_manifest_eval_samples(
+    path: str | Path,
+    *,
+    max_candidates: int = 32,
+) -> tuple[str, list[GroundingSample]]:
+    from datasets import load_dataset
+
+    from gui_grounding.data.mind2web_dataset import HF_DATASET_ID, _bootstrap_hf_environment
+
+    split_name, manifest_samples = _load_manifest_eval_samples(path)
+    target_ids = [sample.sample_id for sample in manifest_samples]
+    target_id_set = set(target_ids)
+    if not target_ids:
+        return split_name, []
+
+    token = _bootstrap_hf_environment()
+    adapter = Mind2WebDataset.__new__(Mind2WebDataset)
+    adapter.split = split_name
+    adapter.max_candidates = max_candidates
+    adapter.cache_screenshots = True
+    adapter.screenshot_dir = PROCESSED_DATA_DIR / "mind2web_screenshots" / split_name
+    adapter.screenshot_dir.mkdir(parents=True, exist_ok=True)
+    adapter._screenshots = {}
+
+    found: dict[str, GroundingSample] = {}
+    dataset_stream = load_dataset(
+        HF_DATASET_ID,
+        split=split_name,
+        streaming=True,
+        token=token,
+    )
+    for row in dataset_stream:
+        action_uid = row.get("action_uid", row.get("annotation_id", "unknown"))
+        sample_id = f"mind2web_{split_name}_{action_uid}"
+        if sample_id not in target_id_set:
+            continue
+        sample, screenshot = adapter._row_to_sample(row)
+        found[sample_id] = sample
+        if screenshot is not None:
+            adapter._handle_screenshot(sample.sample_id, screenshot)
+        if len(found) >= len(target_ids):
+            break
+
+    hydrated = [found[sample_id] for sample_id in target_ids if sample_id in found]
+    missing = [sample_id for sample_id in target_ids if sample_id not in found]
+    if missing:
+        logger.warning(
+            "Hydrated %d/%d manifest samples for split=%s; missing sample_ids=%s",
+            len(hydrated),
+            len(target_ids),
+            split_name,
+            missing[:5],
+        )
+    return split_name, hydrated
+
+
 def _load_checkpoint_eval_loss(checkpoint_dir: str | Path) -> float | None:
     checkpoint_dir = Path(checkpoint_dir)
     state_path = checkpoint_dir / "trainer_state.json"
@@ -317,14 +377,44 @@ def _prediction_to_record(
     pred,
     raw_text: str,
     parsed: dict[str, Any],
+    image_size: tuple[int, int] | None,
+    prompt_candidate_limit: int | None = None,
 ) -> dict[str, Any]:
     pred_bbox = pred.predicted_bbox.as_tuple() if pred.predicted_bbox is not None else None
     gt_bbox = sample.target_bbox.as_tuple() if sample.target_bbox is not None else None
     pred_click = pred.predicted_click_point
     parseable = bool(parsed)
     point_in_box = False
+    predicted_bbox_contains_click = None
+    predicted_bbox_area_to_target_area = None
     if pred_click is not None and gt_bbox is not None:
         point_in_box = gt_bbox[0] <= pred_click[0] <= gt_bbox[2] and gt_bbox[1] <= pred_click[1] <= gt_bbox[3]
+    if pred_bbox is not None and pred_click is not None:
+        predicted_bbox_contains_click = (
+            pred_bbox[0] <= pred_click[0] <= pred_bbox[2] and pred_bbox[1] <= pred_click[1] <= pred_bbox[3]
+        )
+    if pred_bbox is not None and gt_bbox is not None:
+        pred_area = max(float(pred_bbox[2]) - float(pred_bbox[0]), 0.0) * max(float(pred_bbox[3]) - float(pred_bbox[1]), 0.0)
+        gt_area = max(float(gt_bbox[2]) - float(gt_bbox[0]), 0.0) * max(float(gt_bbox[3]) - float(gt_bbox[1]), 0.0)
+        if gt_area > 0.0:
+            predicted_bbox_area_to_target_area = pred_area / gt_area
+    candidate_context = {
+        "target_slot": None,
+        "candidate_count": 0,
+    }
+    if image_size is not None and sample.dom_candidates:
+        candidate_context = build_candidate_prompt_context(
+            sample,
+            image_size,
+            max_candidates=prompt_candidate_limit or len(sample.dom_candidates or []),
+        )
+    target_candidate_slot = candidate_context.get("target_slot")
+    predicted_candidate_slot = getattr(pred, "predicted_candidate_slot", None)
+    candidate_slot_correct = (
+        predicted_candidate_slot is not None
+        and target_candidate_slot is not None
+        and int(predicted_candidate_slot) == int(target_candidate_slot)
+    )
     return {
         "sample_id": sample.sample_id,
         "split": sample.split,
@@ -337,6 +427,7 @@ def _prediction_to_record(
         "predicted_bbox": list(pred_bbox) if pred_bbox is not None else None,
         "predicted_click_point": list(pred_click) if pred_click is not None else None,
         "predicted_element_id": pred.predicted_element_id,
+        "predicted_candidate_slot": predicted_candidate_slot,
         "confidence": pred.confidence,
         "parseable_output": parseable,
         "response_nonempty": bool(raw_text.strip()),
@@ -344,6 +435,13 @@ def _prediction_to_record(
         "valid_bbox": pred_bbox is not None,
         "valid_click_point": pred_click is not None,
         "point_in_target": point_in_box,
+        "predicted_bbox_contains_click": predicted_bbox_contains_click,
+        "predicted_bbox_area_to_target_area": predicted_bbox_area_to_target_area,
+        "target_candidate_slot": target_candidate_slot,
+        "candidate_count": candidate_context.get("candidate_count", 0),
+        "candidate_slot_available": target_candidate_slot is not None,
+        "candidate_slot_correct": candidate_slot_correct,
+        "candidate_slot_used_for_grounding": bool(parsed.get("_candidate_slot_used_for_grounding")) if parsed else False,
         "iou": bbox_iou(pred_bbox, gt_bbox) if pred_bbox is not None and gt_bbox is not None else None,
         "raw_response": raw_text,
         "parsed_payload": parsed,
@@ -370,6 +468,11 @@ def _build_qwen_eval_model(
         coordinate_frame=eval_cfg.get("coordinate_frame", "original"),
         coordinate_format=eval_cfg.get("coordinate_format", "absolute"),
         point_first_prompt=bool(eval_cfg.get("point_first_prompt", False)),
+        target_field_order=eval_cfg.get("target_field_order"),
+        point_primary_bbox_anchored_prompt=bool(eval_cfg.get("point_primary_bbox_anchored_prompt", False)),
+        use_candidate_anchors=bool(eval_cfg.get("use_candidate_anchors", False)),
+        max_prompt_candidates=int(eval_cfg.get("max_prompt_candidates", 32)),
+        candidate_grounding_from_slot=bool(eval_cfg.get("candidate_grounding_from_slot", True)),
         web_mobile_hotspot_prompt=bool(eval_cfg.get("web_mobile_hotspot_prompt", False)),
         decoupled_point_native_decode=bool(eval_cfg.get("decoupled_point_native_decode", False)),
         coordinate_quantization_bins=eval_cfg.get("coordinate_quantization_bins"),
@@ -403,7 +506,21 @@ def _evaluate_qwen_model(
 
     for idx, sample in enumerate(samples, start=1):
         pred, raw_text, parsed = model.predict_with_details(sample)
-        records.append(_prediction_to_record(sample, pred, raw_text, parsed))
+        image_size: tuple[int, int] | None = None
+        image_file = Path(sample.image_path)
+        if image_file.exists():
+            with Image.open(image_file) as image:
+                image_size = image.size
+        records.append(
+            _prediction_to_record(
+                sample,
+                pred,
+                raw_text,
+                parsed,
+                image_size=image_size,
+                prompt_candidate_limit=getattr(model, "max_prompt_candidates", None),
+            )
+        )
         pred_element_ids.append(pred.predicted_element_id)
         gt_element_ids.append(sample.target_element_id)
         pred_bboxes.append(pred.predicted_bbox.as_tuple() if pred.predicted_bbox is not None else None)
@@ -412,11 +529,6 @@ def _evaluate_qwen_model(
         gt_points.append(
             sample.click_point if sample.click_point is not None else (sample.target_bbox.center if sample.target_bbox is not None else None)
         )
-        image_size: tuple[int, int] | None = None
-        image_file = Path(sample.image_path)
-        if image_file.exists():
-            with Image.open(image_file) as image:
-                image_size = image.size
         image_sizes.append(image_size)
         pred_actions.append(pred.predicted_action_type)
         gt_actions.append(str(sample.action_type) if sample.action_type is not None else None)
@@ -445,6 +557,14 @@ def _evaluate_qwen_model(
     valid_click = sum(1 for row in records if row["valid_click_point"])
     valid_action = sum(1 for row in records if row["valid_action_type"])
     response_nonempty = sum(1 for row in records if row["response_nonempty"])
+    bbox_support_hits = [bool(row["predicted_bbox_contains_click"]) for row in records if row["predicted_bbox_contains_click"] is not None]
+    bbox_area_support = [
+        float(row["predicted_bbox_area_to_target_area"])
+        for row in records
+        if row["predicted_bbox_area_to_target_area"] is not None
+    ]
+    candidate_slot_available = [row for row in records if row["candidate_slot_available"]]
+    candidate_slot_predicted = [row for row in candidate_slot_available if row["predicted_candidate_slot"] is not None]
     avg_confidence = sum(float(row["confidence"]) for row in records if row["confidence"] is not None) / max(
         1,
         sum(1 for row in records if row["confidence"] is not None),
@@ -461,6 +581,16 @@ def _evaluate_qwen_model(
         "valid_click_point_rate": valid_click / max(len(records), 1),
         "valid_action_type_rate": valid_action / max(len(records), 1),
         "avg_confidence": avg_confidence,
+        "predicted_bbox_contains_click_rate": sum(bbox_support_hits) / max(len(bbox_support_hits), 1),
+        "mean_predicted_bbox_area_to_target_area": sum(bbox_area_support) / max(len(bbox_area_support), 1),
+        "candidate_slot_available_rate": len(candidate_slot_available) / max(len(records), 1),
+        "candidate_slot_prediction_rate": len(candidate_slot_predicted) / max(len(candidate_slot_available), 1),
+        "candidate_slot_accuracy": (
+            sum(1 for row in candidate_slot_available if row["candidate_slot_correct"]) / max(len(candidate_slot_available), 1)
+        ),
+        "candidate_slot_grounding_rate": (
+            sum(1 for row in records if row["candidate_slot_used_for_grounding"]) / max(len(records), 1)
+        ),
         "collapse_diagnostics": collapse_diagnostics,
         **metrics,
     }
@@ -591,10 +721,15 @@ def main() -> None:
             target_coordinate_frame=str(training_cfg.get("target_coordinate_frame", "original")),
             target_coordinate_format=str(training_cfg.get("target_coordinate_format", "absolute")),
             point_first_target=bool(training_cfg.get("point_first_target", False)),
+            target_field_order=training_cfg.get("target_field_order"),
+            point_primary_bbox_anchored_prompt=bool(training_cfg.get("point_primary_bbox_anchored_prompt", False)),
+            use_candidate_anchors=bool(training_cfg.get("use_candidate_anchors", False)),
+            max_prompt_candidates=int(training_cfg.get("max_prompt_candidates", 32)),
             supervise_element_id=bool(training_cfg.get("supervise_element_id", True)),
             supervision_mode=str(training_cfg.get("supervision_mode", "structured")),
             coordinate_quantization_bins=training_cfg.get("coordinate_quantization_bins"),
             bbox_support_fraction=float(training_cfg.get("bbox_support_fraction", 0.0)),
+            field_loss_weights=training_cfg.get("field_loss_weights"),
             seed=seed,
         )
     elif backend == "clip_grid_legacy":
@@ -645,6 +780,11 @@ def main() -> None:
         raise ValueError(f"Unsupported model.backend={backend}")
 
     result = trainer.train()
+    if backend in {"qwen2_5_vl_3b", "qwen3_vl_2b"}:
+        del trainer
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
     if backend in {"qwen2_5_vl_3b", "qwen3_vl_2b"}:
         eval_cfg = cfg.get("evaluation", {})
         best_checkpoint_dir = result.get("best_checkpoint_dir")
@@ -737,7 +877,13 @@ def main() -> None:
                 if not manifest_file.exists():
                     logger.warning("Skipping missing official eval manifest: %s", manifest_file)
                     continue
-                split_name, manifest_samples = _load_manifest_eval_samples(manifest_file)
+                if eval_cfg.get("hydrate_official_eval_manifests", False):
+                    split_name, manifest_samples = _hydrate_manifest_eval_samples(
+                        manifest_file,
+                        max_candidates=int(eval_cfg.get("max_prompt_candidates", 32)),
+                    )
+                else:
+                    split_name, manifest_samples = _load_manifest_eval_samples(manifest_file)
                 eval_summary["official_cached_subset"][split_name] = _evaluate_qwen_model(
                     model=eval_model,
                     split_name=split_name,

@@ -1,0 +1,89 @@
+experiment:
+  name: mind2web_stageB_candidates_qwen2_5_vl_3b_hybrid_stagea
+  stage: B
+  description: Rebuilt Mind2Web Stage-B candidate export on top of the strong hybrid Stage-A baseline.
+
+model:
+  backend: qwen_vl
+  backbone: qwen2_5_vl_3b
+  adapter_path: outputs/mind2web_stageA_sft_hybrid_candidates/checkpoint-best
+  device: cuda
+  torch_dtype: bfloat16
+  attn_implementation: sdpa
+  gpu_memory_utilization: 0.7
+  max_new_tokens: 224
+  temperature: 0.6
+  min_pixels: 65536
+  max_pixels: 524288
+  coordinate_frame: original
+  coordinate_format: normalized
+  point_first_prompt: false
+  target_field_order: point_bbox_action
+  point_primary_bbox_anchored_prompt: true
+  use_candidate_anchors: true
+  max_prompt_candidates: 32
+  candidate_grounding_from_slot: true
+  web_mobile_hotspot_prompt: false
+  decoupled_point_native_decode: false
+
+candidate_generation:
+  backend: qwen_vl
+  top_k: 4
+  first_choice_temperature: 0.0
+  sampled_temperature: 0.6
+  deduplicate_candidates: true
+  max_generation_attempts: 8
+  generation_strategies:
+    - name: stagea_first_choice
+      temperature: 0.0
+      point_first_prompt: false
+      decoupled_point_native_decode: false
+    - name: structured_sampled_t0p6
+      temperature: 0.6
+      point_first_prompt: false
+      decoupled_point_native_decode: false
+      repeat: 1
+    - name: point_first_structured
+      temperature: 0.0
+      point_first_prompt: true
+      decoupled_point_native_decode: false
+    - name: point_first_sampled_t0p7
+      temperature: 0.7
+      point_first_prompt: true
+      decoupled_point_native_decode: false
+  safe_run:
+    enabled: true
+    force_serial_qwen: true
+    incremental_save: true
+    clear_cuda_cache_on_error: true
+    log_cuda_memory_per_sample: false
+    log_qwen_generate_diagnostics: false
+    cuda_launch_blocking: false
+
+reward:
+  weights:
+    element_correct: 1.0
+    iou: 0.5
+    click_inside_target: 0.3
+    action_type_correct: 0.2
+    invalid_format_penalty: 0.5
+
+data:
+  train:
+    split: train
+    max_samples: 120
+    cache_screenshots: true
+
+output:
+  output_dir: outputs/mind2web_stageB_candidates_hybrid_stagea/train
+  candidates_jsonl: candidates_train.jsonl
+  flat_candidates_jsonl: candidates_train_flat.jsonl
+  summary_json: summary_train.json
+  failure_json: failures_train.json
+  runtime_json: runtime_train.json
+  structured_quality_json: structured_quality_summary.json
+  structured_quality_md: structured_quality_summary.md
+  action_histogram_json: action_type_histogram.json
+
+training:
+  seed: 42

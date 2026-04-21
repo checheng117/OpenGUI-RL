@@ -1,0 +1,11 @@
+| Group Type | Group | Count | Before Point Accuracy | After Point Accuracy | Delta Point Accuracy |
+| --- | --- | --- | --- | --- | --- |
+| platform | desktop | 334 | 0.3084 | 0.6976 | +0.3892 |
+| platform | web | 437 | 0.0046 | 0.6796 | +0.6751 |
+| platform | mobile | 501 | 0.0060 | 0.7445 | +0.7385 |
+| element_type | text | 718 | 0.0947 | 0.8245 | +0.7298 |
+| element_type | icon | 554 | 0.0722 | 0.5614 | +0.4892 |
+| data_source | windows | 159 | 0.6289 | 0.7547 | +0.1258 |
+| data_source | macos | 147 | 0.0204 | 0.6939 | +0.6735 |
+| data_source | ios | 238 | 0.0042 | 0.7353 | +0.7311 |
+| data_source | android | 211 | 0.0047 | 0.8057 | +0.8009 |

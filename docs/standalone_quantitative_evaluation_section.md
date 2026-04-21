@@ -56,6 +56,8 @@
 
 | 指标 | 数值 |
 | --- | ---: |
+| 指标 | 数值 |
+| --- | ---: |
 | Mind2Web Stage B 候选数 | `4`（final rebuild）, `8`（historical expanded） |
 | ScreenSpot-v2 point-native first-choice | `2.1185 s / image` |
 | ScreenSpot-v2 structured support path | `1.3599 s / image` |

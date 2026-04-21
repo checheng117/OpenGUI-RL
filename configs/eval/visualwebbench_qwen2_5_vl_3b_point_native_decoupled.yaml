@@ -1,0 +1,40 @@
+evaluation:
+  name: visualwebbench_qwen2_5_vl_3b_point_native_decoupled
+  description: Point-native decoupled Qwen grounding path on VisualWebBench grounding subsets.
+
+dataset:
+  hf_dataset_id: visualwebbench/VisualWebBench
+  split: test
+  task_types:
+    - element_ground
+    - action_ground
+  image_variant: raw
+  max_samples: null
+
+model:
+  backbone: qwen2_5_vl_3b
+  adapter: qwen_structured_json
+  device: cuda
+  torch_dtype: bfloat16
+  attn_implementation: sdpa
+  gpu_memory_utilization: 0.7
+  max_new_tokens: 192
+  temperature: 0.0
+  min_pixels: 65536
+  max_pixels: 524288
+  coordinate_frame: model_resized
+  coordinate_format: absolute
+  point_first_prompt: false
+  use_candidate_anchors: false
+  candidate_grounding_from_slot: false
+  web_mobile_hotspot_prompt: false
+  decoupled_point_native_decode: true
+  edge_click_interior_threshold: 0.0
+  edge_click_interior_position: 0.45
+
+output:
+  output_dir: outputs/visualwebbench_eval_qwen2_5_vl_3b_point_native_decoupled
+
+runtime:
+  seed: 42
+  log_every: 25

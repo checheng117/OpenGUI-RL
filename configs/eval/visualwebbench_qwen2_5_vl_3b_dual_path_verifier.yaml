@@ -1,0 +1,28 @@
+evaluation:
+  name: visualwebbench_qwen2_5_vl_3b_dual_path_verifier
+  description: Dual-path candidate generation plus lightweight verifier on VisualWebBench grounding subsets.
+
+inputs:
+  point_native_predictions: outputs/visualwebbench_eval_qwen2_5_vl_3b_point_native_decoupled/predictions.jsonl
+  structured_predictions: outputs/visualwebbench_eval_qwen2_5_vl_3b_model_resized/predictions.jsonl
+  point_native_summary: outputs/visualwebbench_eval_qwen2_5_vl_3b_point_native_decoupled/evaluation_summary.json
+  structured_summary: outputs/visualwebbench_eval_qwen2_5_vl_3b_model_resized/evaluation_summary.json
+
+verifier:
+  structured_override_confidence_min: 0.95
+  structured_override_min_click_disagreement_px: 20.0
+  source_prior_point_native: 0.25
+  source_prior_structured: 0.10
+  source_prior_hybrid: 0.85
+  format_bonus: 0.60
+  action_valid_bonus: 0.25
+  click_inside_own_bbox_bonus: 0.40
+  other_bbox_support_bonus: 0.35
+  confidence_bonus_weight: 0.20
+  hybrid_supported_by_structured_bonus: 0.20
+  structured_override_bonus: 1.50
+  hybrid_override_penalty: 1.20
+  point_candidate_penalty: 0.15
+
+output:
+  output_dir: outputs/visualwebbench_eval_qwen2_5_vl_3b_dual_path_verifier

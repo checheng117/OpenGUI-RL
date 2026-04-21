@@ -123,6 +123,13 @@ class TestParseCandidate:
         )
         assert "Submit form" in cand.text
 
+    def test_with_cleaned_html_text(self):
+        cand = _parse_candidate(
+            self._make_candidate_json(extra_attrs={}),
+            cleaned_html='<button backend_node_id="123"><text backend_node_id="124">Search flights</text></button>',
+        )
+        assert "Search flights" in cand.text
+
     def test_missing_bbox(self):
         attrs = {"backend_node_id": "999"}
         obj = {"tag": "span", "attributes": json.dumps(attrs), "backend_node_id": "999"}

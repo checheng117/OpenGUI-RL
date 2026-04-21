@@ -1,0 +1,44 @@
+evaluation:
+  name: visualwebbench_mind2web_stageA_qwen2_5_vl_3b_hybrid_candidates
+  description: Mind2Web-trained hybrid candidate-aware Stage A transfer evaluation on VisualWebBench grounding subsets.
+
+dataset:
+  hf_dataset_id: visualwebbench/VisualWebBench
+  split: test
+  task_types:
+    - element_ground
+    - action_ground
+  image_variant: raw
+  max_samples: null
+
+model:
+  backbone: qwen2_5_vl_3b
+  adapter: qwen_structured_json
+  adapter_path: outputs/mind2web_stageA_sft_hybrid_candidates/checkpoint-best
+  device: cuda
+  torch_dtype: bfloat16
+  attn_implementation: sdpa
+  gpu_memory_utilization: 0.7
+  max_new_tokens: 224
+  temperature: 0.0
+  min_pixels: 65536
+  max_pixels: 524288
+  coordinate_frame: original
+  coordinate_format: normalized
+  point_first_prompt: true
+  target_field_order: point_bbox_action
+  point_primary_bbox_anchored_prompt: true
+  use_candidate_anchors: true
+  max_prompt_candidates: 8
+  candidate_grounding_from_slot: true
+  web_mobile_hotspot_prompt: false
+  decoupled_point_native_decode: false
+  edge_click_interior_threshold: 0.0
+  edge_click_interior_position: 0.45
+
+output:
+  output_dir: outputs/visualwebbench_eval_mind2web_stageA_hybrid_candidates
+
+runtime:
+  seed: 42
+  log_every: 25

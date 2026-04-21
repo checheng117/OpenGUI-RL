@@ -1,0 +1,10 @@
+# VisualWebBench Method Comparison
+
+Supplementary transfer benchmark over the grounding-compatible subsets only.
+
+| Method | Official choice acc | Point accuracy | IoU@0.5 | Mean IoU | Parseable |
+| --- | --- | --- | --- | --- | --- |
+| Structured screenshot-only | 0.7888 | 0.6453 | 0.2771 | 0.3206 | 1.0000 |
+| Point-native decoupled | 0.8721 | 0.7946 | 0.3004 | 0.3435 | 1.0000 |
+| Dual-path verifier | 0.8682 | 0.7965 | 0.2771 | 0.3312 | 1.0000 |
+| Mind2Web hybrid transfer | 0.2384 | 0.2384 | 0.2384 | 0.2384 | 1.0000 |

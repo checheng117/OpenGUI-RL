@@ -106,6 +106,7 @@ class PredictionResult(BaseModel):
     predicted_bbox: Optional[BBox] = None
     predicted_click_point: Optional[tuple[float, float]] = None
     predicted_element_id: Optional[str] = None
+    predicted_candidate_slot: Optional[int] = None
     confidence: Optional[float] = None
     candidate_scores: Optional[list[float]] = None
 

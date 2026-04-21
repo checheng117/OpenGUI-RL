@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 import torch
+import torch.nn.functional as F
 from PIL import Image
 from peft import LoraConfig, TaskType, get_peft_model
 from torch.optim import AdamW
@@ -16,6 +17,7 @@ from torch.utils.data import DataLoader, Dataset
 from transformers import AutoModelForImageTextToText, AutoProcessor, get_scheduler
 from transformers.models.qwen2_vl.image_processing_qwen2_vl import smart_resize
 
+from gui_grounding.data.candidate_representation import build_candidate_prompt_context
 from gui_grounding.data.schemas import GroundingSample
 from gui_grounding.models.vlm_backbone import VLMBackbone
 from gui_grounding.utils.io import save_json, save_jsonl
@@ -33,9 +35,59 @@ DEFAULT_LORA_TARGET_MODULES = (
     "down_proj",
 )
 
+DEFAULT_FIELD_LOSS_WEIGHTS = {
+    "syntax": 1.0,
+    "click": 1.0,
+    "action": 1.0,
+    "bbox": 1.0,
+    "candidate_slot": 1.0,
+    "element_id": 1.0,
+    "confidence": 1.0,
+}
+
 
 def _clamp(v: float, lower: float, upper: float) -> float:
     return max(lower, min(upper, v))
+
+
+def _resolve_target_field_order(point_first_target: bool, target_field_order: str | None) -> str:
+    if target_field_order is None or not str(target_field_order).strip():
+        return "point_bbox_action" if point_first_target else "action_bbox_point"
+    normalized = str(target_field_order).strip().lower()
+    allowed = {
+        "action_bbox_point",
+        "point_bbox_action",
+        "point_action_bbox",
+    }
+    if normalized not in allowed:
+        raise ValueError(f"Unsupported target_field_order={target_field_order}")
+    return normalized
+
+
+def _ordered_core_fields(field_order: str) -> list[str]:
+    if field_order == "action_bbox_point":
+        return ["action", "bbox", "click"]
+    if field_order == "point_bbox_action":
+        return ["click", "bbox", "action"]
+    if field_order == "point_action_bbox":
+        return ["click", "action", "bbox"]
+    raise ValueError(f"Unsupported field_order={field_order}")
+
+
+def _resolve_field_loss_weights(field_loss_weights: dict[str, float] | None) -> dict[str, float]:
+    weights = dict(DEFAULT_FIELD_LOSS_WEIGHTS)
+    if not field_loss_weights:
+        return weights
+    for raw_key, raw_value in field_loss_weights.items():
+        key = str(raw_key).strip().lower()
+        if key not in weights:
+            raise ValueError(f"Unsupported field loss weight key={raw_key}")
+        weights[key] = max(float(raw_value), 0.0)
+    return weights
+
+
+def _json_value_text(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
 
 
 def _coordinate_size_for_supervision(
@@ -226,10 +278,15 @@ def _build_training_prompt(
     coordinate_frame: str = "original",
     coordinate_format: str = "absolute",
     point_first_target: bool = False,
+    target_field_order: str | None = None,
+    point_primary_bbox_anchored_prompt: bool = False,
+    candidate_prompt_block: str = "",
+    include_candidate_slot: bool = False,
     coordinate_quantization_bins: int | None = None,
     min_pixels: int | None = None,
     max_pixels: int | None = None,
 ) -> str:
+    resolved_field_order = _resolve_target_field_order(point_first_target, target_field_order)
     if coordinate_quantization_bins is not None:
         coordinate_instruction, _ = _build_quantized_coordinate_instruction(
             image_size=image_size,
@@ -239,22 +296,34 @@ def _build_training_prompt(
             max_pixels=max_pixels,
         )
         point_priority_instruction = ""
-        schema_lines = [
-            '  "action_type": "click|type|select|hover",',
-            '  "bbox_bin": [x1_bin, y1_bin, x2_bin, y2_bin],',
-            '  "point_bin": [x_bin, y_bin]',
-        ]
+        core_schema_lines = {
+            "action": '  "action_type": "click|type|select|hover",',
+            "bbox": '  "bbox_bin": [x1_bin, y1_bin, x2_bin, y2_bin],',
+            "click": '  "point_bin": [x_bin, y_bin]',
+        }
+        schema_lines = [core_schema_lines[name] for name in _ordered_core_fields(resolved_field_order)]
+        if include_candidate_slot:
+            schema_lines.append('  "candidate_slot": 1 or null,')
         if point_first_target:
             point_priority_instruction = (
                 "Primary goal: predict point_bin first.\n"
                 "Place point_bin on the exact user click location inside the actionable interior of the target.\n"
                 "Then make bbox_bin enclose that clicked target region.\n"
             )
-            schema_lines = [
-                '  "point_bin": [x_bin, y_bin],',
-                '  "action_type": "click|type|select|hover",',
-                '  "bbox_bin": [x1_bin, y1_bin, x2_bin, y2_bin]',
-            ]
+            if point_primary_bbox_anchored_prompt:
+                point_priority_instruction += (
+                    "bbox_bin is supporting structure for point_bin rather than the primary target.\n"
+                    "bbox_bin must contain the chosen point_bin and stay tight around the clicked element.\n"
+                    "If the exact click and exact bbox edges conflict, prioritize point_bin and keep bbox_bin supportive.\n"
+                )
+        candidate_guidance = ""
+        if candidate_prompt_block:
+            candidate_guidance = (
+                f"{candidate_prompt_block}"
+                "Use the candidate anchors together with the screenshot.\n"
+                "If one candidate clearly matches the target, set candidate_slot to its 1-based index; otherwise use null.\n"
+                "When candidate_slot is set, point_bin and bbox_bin should refer to that same candidate.\n"
+            )
         schema_text = "{\n" + "\n".join(schema_lines) + "\n}\n\n"
         return (
             "You are a GUI grounding model.\n"
@@ -263,6 +332,7 @@ def _build_training_prompt(
             f"{schema_text}"
             f"{coordinate_instruction}"
             f"{point_priority_instruction}"
+            f"{candidate_guidance}"
             "If uncertain, still provide the best grounded action.\n\n"
             f"Instruction: {sample.instruction}\n"
         )
@@ -304,27 +374,37 @@ def _build_training_prompt(
         raise ValueError(f"Unsupported coordinate_format={coordinate_format}")
 
     point_priority_instruction = ""
-    schema_lines = [
-        '  "action_type": "click|type|select|hover",',
+    core_schema_lines = {
+        "action": '  "action_type": "click|type|select|hover",',
+        "bbox": '  "predicted_bbox": [x1, y1, x2, y2],',
+        "click": '  "predicted_click_point": [x, y],',
+    }
+    schema_lines = [core_schema_lines[name] for name in _ordered_core_fields(resolved_field_order)] + [
+        *(['  "candidate_slot": 1 or null,'] if include_candidate_slot else []),
         '  "predicted_element_id": "string or null",',
-        '  "predicted_bbox": [x1, y1, x2, y2],',
-        '  "predicted_click_point": [x, y],',
         '  "confidence": 0.0',
     ]
     if point_first_target:
-        point_priority_instruction = (
-            "Primary goal: predict predicted_click_point first.\n"
-            "Place the click inside the actionable interior of the target, preferably near its center.\n"
+            point_priority_instruction = (
+                "Primary goal: predict predicted_click_point first.\n"
+                "Place the click inside the actionable interior of the target, preferably near its center.\n"
             "Then make predicted_bbox enclose that clicked target region.\n"
             "If you are unsure about predicted_element_id, use null.\n"
         )
-        schema_lines = [
-            '  "predicted_click_point": [x, y],',
-            '  "predicted_bbox": [x1, y1, x2, y2],',
-            '  "action_type": "click|type|select|hover",',
-            '  "predicted_element_id": "string or null",',
-            '  "confidence": 0.0',
-        ]
+            if point_primary_bbox_anchored_prompt:
+                point_priority_instruction += (
+                    "predicted_bbox is supporting structure for predicted_click_point rather than the primary target.\n"
+                    "predicted_bbox must contain the chosen click and stay tight around the clicked element.\n"
+                    "If the exact click and exact bbox edges conflict, prioritize predicted_click_point and keep predicted_bbox supportive.\n"
+                )
+    candidate_guidance = ""
+    if candidate_prompt_block:
+        candidate_guidance = (
+            f"{candidate_prompt_block}"
+            "Use the candidate anchors together with the screenshot.\n"
+            "If one candidate clearly matches the target, set candidate_slot to its 1-based index; otherwise use null.\n"
+            "When candidate_slot is set, predicted_click_point and predicted_bbox should correspond to that same candidate.\n"
+        )
 
     schema_text = "{\n" + "\n".join(schema_lines) + "\n}\n\n"
     return (
@@ -334,6 +414,7 @@ def _build_training_prompt(
         f"{schema_text}"
         f"{coordinate_instruction}"
         f"{point_priority_instruction}"
+        f"{candidate_guidance}"
         "If uncertain, still provide the best grounded action.\n\n"
         f"Instruction: {sample.instruction}\n"
     )
@@ -346,11 +427,47 @@ def _build_target_text(
     coordinate_frame: str = "original",
     coordinate_format: str = "absolute",
     point_first_target: bool = False,
+    target_field_order: str | None = None,
     coordinate_quantization_bins: int | None = None,
     supervise_element_id: bool = True,
+    field_loss_weights: dict[str, float] | None = None,
     min_pixels: int | None = None,
     max_pixels: int | None = None,
 ) -> str:
+    segments = _build_target_segments(
+        sample=sample,
+        image_size=image_size,
+        coordinate_frame=coordinate_frame,
+        coordinate_format=coordinate_format,
+        point_first_target=point_first_target,
+        target_field_order=target_field_order,
+        coordinate_quantization_bins=coordinate_quantization_bins,
+        supervise_element_id=supervise_element_id,
+        field_loss_weights=field_loss_weights,
+        min_pixels=min_pixels,
+        max_pixels=max_pixels,
+    )
+    return "".join(str(segment["text"]) for segment in segments)
+
+
+def _build_target_segments(
+    sample: GroundingSample,
+    image_size: tuple[int, int],
+    *,
+    coordinate_frame: str = "original",
+    coordinate_format: str = "absolute",
+    point_first_target: bool = False,
+    target_field_order: str | None = None,
+    candidate_target_slot: int | None = None,
+    include_candidate_slot: bool = False,
+    coordinate_quantization_bins: int | None = None,
+    supervise_element_id: bool = True,
+    field_loss_weights: dict[str, float] | None = None,
+    min_pixels: int | None = None,
+    max_pixels: int | None = None,
+) -> list[dict[str, Any]]:
+    resolved_field_order = _resolve_target_field_order(point_first_target, target_field_order)
+    weights = _resolve_field_loss_weights(field_loss_weights)
     coord_size, target_bbox, click, action_type = _resolve_serialization_targets(
         sample=sample,
         image_size=image_size,
@@ -371,36 +488,48 @@ def _build_target_text(
     predicted_element_id = sample.target_element_id if supervise_element_id else None
 
     if coordinate_quantization_bins is not None:
-        if point_first_target:
-            payload = {
-                "point_bin": serialized_click,
-                "action_type": action_type,
-                "bbox_bin": serialized_bbox,
-            }
-        else:
-            payload = {
-                "action_type": action_type,
-                "bbox_bin": serialized_bbox,
-                "point_bin": serialized_click,
-            }
+        field_text = {
+            "click": f'"point_bin":{_json_value_text(serialized_click)}',
+            "action": f'"action_type":{_json_value_text(action_type)}',
+            "bbox": f'"bbox_bin":{_json_value_text(serialized_bbox)}',
+            "candidate_slot": f'"candidate_slot":{_json_value_text(candidate_target_slot)}',
+        }
+        ordered_fields = [
+            {"field": name, "text": field_text[name], "weight": weights[name]}
+            for name in _ordered_core_fields(resolved_field_order)
+        ] + (
+            [{"field": "candidate_slot", "text": field_text["candidate_slot"], "weight": weights["candidate_slot"]}]
+            if include_candidate_slot
+            else []
+        )
     else:
-        if point_first_target:
-            payload = {
-                "predicted_click_point": serialized_click,
-                "predicted_bbox": serialized_bbox,
-                "action_type": action_type,
-                "predicted_element_id": predicted_element_id,
-                "confidence": 1.0,
-            }
-        else:
-            payload = {
-                "action_type": action_type,
-                "predicted_element_id": predicted_element_id,
-                "predicted_bbox": serialized_bbox,
-                "predicted_click_point": serialized_click,
-                "confidence": 1.0,
-            }
-    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+        field_text = {
+            "click": f'"predicted_click_point":{_json_value_text(serialized_click)}',
+            "action": f'"action_type":{_json_value_text(action_type)}',
+            "bbox": f'"predicted_bbox":{_json_value_text(serialized_bbox)}',
+            "candidate_slot": f'"candidate_slot":{_json_value_text(candidate_target_slot)}',
+            "element_id": f'"predicted_element_id":{_json_value_text(predicted_element_id)}',
+            "confidence": f'"confidence":{_json_value_text(1.0)}',
+        }
+        ordered_fields = [
+            {"field": name, "text": field_text[name], "weight": weights[name]}
+            for name in _ordered_core_fields(resolved_field_order)
+        ] + (
+            [{"field": "candidate_slot", "text": field_text["candidate_slot"], "weight": weights["candidate_slot"]}]
+            if include_candidate_slot
+            else []
+        ) + [
+            {"field": "element_id", "text": field_text["element_id"], "weight": weights["element_id"]},
+            {"field": "confidence", "text": field_text["confidence"], "weight": weights["confidence"]},
+        ]
+
+    segments: list[dict[str, Any]] = [{"field": "syntax", "text": "{", "weight": weights["syntax"]}]
+    for idx, field in enumerate(ordered_fields):
+        segments.append(field)
+        if idx < len(ordered_fields) - 1:
+            segments.append({"field": "syntax", "text": ",", "weight": weights["syntax"]})
+    segments.append({"field": "syntax", "text": "}", "weight": weights["syntax"]})
+    return segments
 
 
 def _build_point_native_primary_prompt(
@@ -528,10 +657,15 @@ class QwenSFTDataset(Dataset):
         coordinate_frame: str = "original",
         coordinate_format: str = "absolute",
         point_first_target: bool = False,
+        target_field_order: str | None = None,
+        point_primary_bbox_anchored_prompt: bool = False,
+        use_candidate_anchors: bool = False,
+        max_prompt_candidates: int = 32,
         supervise_element_id: bool = True,
         supervision_mode: str = "structured",
         coordinate_quantization_bins: int | None = None,
         bbox_support_fraction: float = 0.0,
+        field_loss_weights: dict[str, float] | None = None,
         seed: int = 42,
         min_pixels: int | None = None,
         max_pixels: int | None = None,
@@ -540,12 +674,17 @@ class QwenSFTDataset(Dataset):
         self.coordinate_frame = coordinate_frame
         self.coordinate_format = coordinate_format
         self.point_first_target = bool(point_first_target)
+        self.target_field_order = _resolve_target_field_order(self.point_first_target, target_field_order)
+        self.point_primary_bbox_anchored_prompt = bool(point_primary_bbox_anchored_prompt)
+        self.use_candidate_anchors = bool(use_candidate_anchors)
+        self.max_prompt_candidates = max(int(max_prompt_candidates), 0)
         self.supervise_element_id = bool(supervise_element_id)
         self.supervision_mode = str(supervision_mode)
         self.coordinate_quantization_bins = (
             int(coordinate_quantization_bins) if coordinate_quantization_bins is not None else None
         )
         self.bbox_support_fraction = float(bbox_support_fraction)
+        self.field_loss_weights = _resolve_field_loss_weights(field_loss_weights)
         self.seed = int(seed)
         self.min_pixels = min_pixels
         self.max_pixels = max_pixels
@@ -616,6 +755,11 @@ class QwenSFTDataset(Dataset):
             "example_type_counts": counts,
             "coordinate_quantization_bins": self.coordinate_quantization_bins,
             "bbox_support_fraction": self.bbox_support_fraction,
+            "target_field_order": self.target_field_order,
+            "point_primary_bbox_anchored_prompt": self.point_primary_bbox_anchored_prompt,
+            "use_candidate_anchors": self.use_candidate_anchors,
+            "max_prompt_candidates": self.max_prompt_candidates,
+            "field_loss_weights": self.field_loss_weights,
         }
 
     def __getitem__(self, idx: int) -> dict[str, Any]:
@@ -623,6 +767,17 @@ class QwenSFTDataset(Dataset):
         sample = entry["sample"]
         example_type = str(entry["example_type"])
         image = Image.open(sample.image_path).convert("RGB")
+        candidate_context = {
+            "candidate_prompt_block": "",
+            "target_slot": None,
+            "candidate_count": 0,
+        }
+        if self.use_candidate_anchors:
+            candidate_context = build_candidate_prompt_context(
+                sample,
+                image.size,
+                max_candidates=self.max_prompt_candidates,
+            )
         if example_type == "structured":
             prompt = _build_training_prompt(
                 sample=sample,
@@ -630,21 +785,30 @@ class QwenSFTDataset(Dataset):
                 coordinate_frame=self.coordinate_frame,
                 coordinate_format=self.coordinate_format,
                 point_first_target=self.point_first_target,
+                target_field_order=self.target_field_order,
+                point_primary_bbox_anchored_prompt=self.point_primary_bbox_anchored_prompt,
+                candidate_prompt_block=str(candidate_context["candidate_prompt_block"]),
+                include_candidate_slot=self.use_candidate_anchors,
                 coordinate_quantization_bins=self.coordinate_quantization_bins,
                 min_pixels=self.min_pixels,
                 max_pixels=self.max_pixels,
             )
-            target_text = _build_target_text(
+            target_segments = _build_target_segments(
                 sample=sample,
                 image_size=image.size,
                 coordinate_frame=self.coordinate_frame,
                 coordinate_format=self.coordinate_format,
                 point_first_target=self.point_first_target,
+                target_field_order=self.target_field_order,
+                candidate_target_slot=candidate_context["target_slot"],
+                include_candidate_slot=self.use_candidate_anchors,
                 coordinate_quantization_bins=self.coordinate_quantization_bins,
                 supervise_element_id=self.supervise_element_id,
+                field_loss_weights=self.field_loss_weights,
                 min_pixels=self.min_pixels,
                 max_pixels=self.max_pixels,
             )
+            target_text = "".join(str(segment["text"]) for segment in target_segments)
         elif example_type == "point_primary":
             prompt = _build_point_native_primary_prompt(
                 sample=sample,
@@ -662,6 +826,7 @@ class QwenSFTDataset(Dataset):
                 min_pixels=self.min_pixels,
                 max_pixels=self.max_pixels,
             )
+            target_segments = [{"field": "full_target", "text": target_text, "weight": 1.0}]
         elif example_type == "bbox_support":
             prompt = _build_bbox_support_prompt(
                 sample=sample,
@@ -679,6 +844,7 @@ class QwenSFTDataset(Dataset):
                 min_pixels=self.min_pixels,
                 max_pixels=self.max_pixels,
             )
+            target_segments = [{"field": "full_target", "text": target_text, "weight": 1.0}]
         else:
             raise ValueError(f"Unsupported example_type={example_type}")
         return {
@@ -686,6 +852,9 @@ class QwenSFTDataset(Dataset):
             "image": image,
             "prompt": prompt,
             "target_text": target_text,
+            "target_segments": target_segments,
+            "candidate_target_slot": candidate_context["target_slot"],
+            "candidate_count": candidate_context["candidate_count"],
         }
 
 
@@ -722,6 +891,20 @@ class QwenSFTCollator:
         if self.max_pixels is not None:
             processor_kwargs["max_pixels"] = int(self.max_pixels)
         return self.processor(**processor_kwargs)
+
+    def _segment_token_lengths(self, target_segments: list[dict[str, Any]]) -> list[int]:
+        cumulative_text = ""
+        cumulative_lengths: list[int] = []
+        for segment in target_segments:
+            cumulative_text += str(segment.get("text", ""))
+            tokenized = self.processor.tokenizer(cumulative_text, add_special_tokens=False)
+            cumulative_lengths.append(len(tokenized.get("input_ids", [])))
+        lengths: list[int] = []
+        previous = 0
+        for current in cumulative_lengths:
+            lengths.append(max(int(current) - int(previous), 0))
+            previous = current
+        return lengths
 
     def __call__(self, batch: list[dict[str, Any]]) -> dict[str, Any]:
         full_messages: list[list[dict[str, Any]]] = []
@@ -770,12 +953,31 @@ class QwenSFTCollator:
         prompt_inputs = self.processor(**prompt_kwargs)
 
         labels = model_inputs["input_ids"].clone()
+        loss_weights = torch.zeros_like(model_inputs["input_ids"], dtype=torch.float32)
         pad_token_id = self.processor.tokenizer.pad_token_id
         labels[labels == pad_token_id] = -100
         prompt_lengths = prompt_inputs["attention_mask"].sum(dim=1)
+        full_lengths = model_inputs["attention_mask"].sum(dim=1)
         for row_idx, prompt_len in enumerate(prompt_lengths.tolist()):
-            labels[row_idx, : int(prompt_len)] = -100
+            prompt_len_int = int(prompt_len)
+            labels[row_idx, :prompt_len_int] = -100
+            target_end = int(full_lengths[row_idx].item())
+            if target_end <= prompt_len_int:
+                continue
+            cursor = prompt_len_int
+            target_segments = batch[row_idx].get("target_segments") or [
+                {"field": "full_target", "text": batch[row_idx]["target_text"], "weight": 1.0}
+            ]
+            for segment, seg_len in zip(target_segments, self._segment_token_lengths(target_segments)):
+                if seg_len <= 0 or cursor >= target_end:
+                    continue
+                next_cursor = min(cursor + int(seg_len), target_end)
+                loss_weights[row_idx, cursor:next_cursor] = float(segment.get("weight", 1.0))
+                cursor = next_cursor
+            if cursor < target_end:
+                loss_weights[row_idx, cursor:target_end] = 1.0
         model_inputs["labels"] = labels
+        model_inputs["loss_weights"] = loss_weights
         model_inputs["sample_ids"] = [item["sample_id"] for item in batch]
         return model_inputs
 
@@ -815,10 +1017,15 @@ class QwenSFTTrainer:
         target_coordinate_frame: str = "original",
         target_coordinate_format: str = "absolute",
         point_first_target: bool = False,
+        target_field_order: str | None = None,
+        point_primary_bbox_anchored_prompt: bool = False,
+        use_candidate_anchors: bool = False,
+        max_prompt_candidates: int = 32,
         supervise_element_id: bool = True,
         supervision_mode: str = "structured",
         coordinate_quantization_bins: int | None = None,
         bbox_support_fraction: float = 0.0,
+        field_loss_weights: dict[str, float] | None = None,
         seed: int = 42,
     ) -> None:
         self.output_dir = Path(output_dir)
@@ -841,12 +1048,17 @@ class QwenSFTTrainer:
         self.target_coordinate_frame = str(target_coordinate_frame)
         self.target_coordinate_format = str(target_coordinate_format)
         self.point_first_target = bool(point_first_target)
+        self.target_field_order = _resolve_target_field_order(self.point_first_target, target_field_order)
+        self.point_primary_bbox_anchored_prompt = bool(point_primary_bbox_anchored_prompt)
+        self.use_candidate_anchors = bool(use_candidate_anchors)
+        self.max_prompt_candidates = max(int(max_prompt_candidates), 0)
         self.supervise_element_id = bool(supervise_element_id)
         self.supervision_mode = str(supervision_mode)
         self.coordinate_quantization_bins = (
             int(coordinate_quantization_bins) if coordinate_quantization_bins is not None else None
         )
         self.bbox_support_fraction = float(bbox_support_fraction)
+        self.field_loss_weights = _resolve_field_loss_weights(field_loss_weights)
         self.seed = int(seed)
 
         if device == "auto":
@@ -913,10 +1125,15 @@ class QwenSFTTrainer:
             coordinate_frame=self.target_coordinate_frame,
             coordinate_format=self.target_coordinate_format,
             point_first_target=self.point_first_target,
+            target_field_order=self.target_field_order,
+            point_primary_bbox_anchored_prompt=self.point_primary_bbox_anchored_prompt,
+            use_candidate_anchors=self.use_candidate_anchors,
+            max_prompt_candidates=self.max_prompt_candidates,
             supervise_element_id=self.supervise_element_id,
             supervision_mode=self.supervision_mode,
             coordinate_quantization_bins=self.coordinate_quantization_bins,
             bbox_support_fraction=self.bbox_support_fraction,
+            field_loss_weights=self.field_loss_weights,
             seed=self.seed,
             min_pixels=self.min_pixels,
             max_pixels=self.max_pixels,
@@ -926,10 +1143,15 @@ class QwenSFTTrainer:
             coordinate_frame=self.target_coordinate_frame,
             coordinate_format=self.target_coordinate_format,
             point_first_target=self.point_first_target,
+            target_field_order=self.target_field_order,
+            point_primary_bbox_anchored_prompt=self.point_primary_bbox_anchored_prompt,
+            use_candidate_anchors=self.use_candidate_anchors,
+            max_prompt_candidates=self.max_prompt_candidates,
             supervise_element_id=self.supervise_element_id,
             supervision_mode=self.supervision_mode,
             coordinate_quantization_bins=self.coordinate_quantization_bins,
             bbox_support_fraction=self.bbox_support_fraction,
+            field_loss_weights=self.field_loss_weights,
             seed=self.seed + 1009,
             min_pixels=self.min_pixels,
             max_pixels=self.max_pixels,
@@ -1016,20 +1238,38 @@ class QwenSFTTrainer:
                 moved[key] = value
         return moved
 
+    def _compute_batch_loss(self, batch: dict[str, Any]) -> torch.Tensor:
+        outputs = self.model(
+            input_ids=batch["input_ids"],
+            attention_mask=batch["attention_mask"],
+            pixel_values=batch["pixel_values"],
+            image_grid_thw=batch.get("image_grid_thw"),
+        )
+        logits = outputs.logits
+        labels = batch["labels"]
+        loss_weights = batch.get("loss_weights")
+        shift_logits = logits[..., :-1, :].contiguous()
+        shift_labels = labels[..., 1:].contiguous()
+        token_losses = F.cross_entropy(
+            shift_logits.view(-1, shift_logits.size(-1)),
+            shift_labels.view(-1),
+            ignore_index=-100,
+            reduction="none",
+        ).view_as(shift_labels)
+        valid_mask = (shift_labels != -100).to(token_losses.dtype)
+        if loss_weights is None:
+            effective_weights = valid_mask
+        else:
+            effective_weights = loss_weights[..., 1:].contiguous().to(token_losses.dtype) * valid_mask
+        return (token_losses * effective_weights).sum() / effective_weights.sum().clamp_min(1e-8)
+
     def _evaluate_loss(self) -> dict[str, float]:
         self.model.eval()
         losses: list[float] = []
         with torch.inference_mode():
             for batch in self.eval_loader:
                 batch = self._move_batch_to_device(batch)
-                outputs = self.model(
-                    input_ids=batch["input_ids"],
-                    attention_mask=batch["attention_mask"],
-                    pixel_values=batch["pixel_values"],
-                    image_grid_thw=batch.get("image_grid_thw"),
-                    labels=batch["labels"],
-                )
-                losses.append(float(outputs.loss.detach().cpu().item()))
+                losses.append(float(self._compute_batch_loss(batch).detach().cpu().item()))
         self.model.train()
         eval_loss = sum(losses) / max(len(losses), 1)
         return {"eval_loss": eval_loss}
@@ -1050,10 +1290,15 @@ class QwenSFTTrainer:
                 "target_coordinate_frame": self.target_coordinate_frame,
                 "target_coordinate_format": self.target_coordinate_format,
                 "point_first_target": self.point_first_target,
+                "target_field_order": self.target_field_order,
+                "point_primary_bbox_anchored_prompt": self.point_primary_bbox_anchored_prompt,
+                "use_candidate_anchors": self.use_candidate_anchors,
+                "max_prompt_candidates": self.max_prompt_candidates,
                 "supervise_element_id": self.supervise_element_id,
                 "supervision_mode": self.supervision_mode,
                 "coordinate_quantization_bins": self.coordinate_quantization_bins,
                 "bbox_support_fraction": self.bbox_support_fraction,
+                "field_loss_weights": self.field_loss_weights,
             },
             ckpt_dir / "trainer_state.json",
         )
@@ -1081,16 +1326,10 @@ class QwenSFTTrainer:
         for epoch in range(1, self.num_epochs + 1):
             for batch_idx, batch in enumerate(self.train_loader, start=1):
                 batch = self._move_batch_to_device(batch)
-                outputs = self.model(
-                    input_ids=batch["input_ids"],
-                    attention_mask=batch["attention_mask"],
-                    pixel_values=batch["pixel_values"],
-                    image_grid_thw=batch.get("image_grid_thw"),
-                    labels=batch["labels"],
-                )
-                loss = outputs.loss / self.gradient_accumulation_steps
+                batch_loss = self._compute_batch_loss(batch)
+                loss = batch_loss / self.gradient_accumulation_steps
                 loss.backward()
-                running_loss += float(outputs.loss.detach().cpu().item())
+                running_loss += float(batch_loss.detach().cpu().item())
 
                 should_step = (
                     batch_idx % self.gradient_accumulation_steps == 0
@@ -1184,10 +1423,15 @@ class QwenSFTTrainer:
             "target_coordinate_frame": self.target_coordinate_frame,
             "target_coordinate_format": self.target_coordinate_format,
             "point_first_target": self.point_first_target,
+            "target_field_order": self.target_field_order,
+            "point_primary_bbox_anchored_prompt": self.point_primary_bbox_anchored_prompt,
+            "use_candidate_anchors": self.use_candidate_anchors,
+            "max_prompt_candidates": self.max_prompt_candidates,
             "supervise_element_id": self.supervise_element_id,
             "supervision_mode": self.supervision_mode,
             "coordinate_quantization_bins": self.coordinate_quantization_bins,
             "bbox_support_fraction": self.bbox_support_fraction,
+            "field_loss_weights": self.field_loss_weights,
             "train_supervision_stats": self.train_dataset.example_stats,
             "eval_supervision_stats": self.eval_dataset.example_stats,
             "best_eval_loss": self._best_eval_loss,

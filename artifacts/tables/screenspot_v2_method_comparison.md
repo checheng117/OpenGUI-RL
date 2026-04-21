@@ -1,0 +1,10 @@
+# ScreenSpot-v2 Method Comparison
+
+Same-protocol public baseline, coordinate-refined structured run, point-native decoupled run, and dual-path verifier.
+
+| Method | Point accuracy | IoU@0.5 | Mean IoU | Action valid | Parseable |
+| --- | --- | --- | --- | --- | --- |
+| Public baseline | 0.7563 | 0.0519 | 0.1327 | 0.2980 | 0.9937 |
+| Structured coord-fix | 0.7099 | 0.1682 | 0.2404 | 1.0000 | 1.0000 |
+| Point-native decoupled | 0.7736 | 0.0967 | 0.1912 | 1.0000 | 1.0000 |
+| Dual-path verifier | 0.7791 | 0.1722 | 0.2520 | 1.0000 | 1.0000 |

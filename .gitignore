@@ -36,6 +36,7 @@ ENV/
 # Project outputs
 outputs/
 !outputs/.gitkeep
+report/
 checkpoints/
 wandb/
 runs/
@@ -60,6 +61,23 @@ data/manifests/*
 
 # Environment
 .env
+.env.*
+!.env.example
+OPEN_SOURCE_AUDIT.md
+RELEASE_CHANGELOG.md
+
+# LaTeX build outputs
+*.aux
+*.bbl
+*.bcf
+*.blg
+*.fdb_latexmk
+*.fls
+*.log
+*.out
+*.run.xml
+*.synctex.gz
+*.toc
 
 # Coverage
 htmlcov/

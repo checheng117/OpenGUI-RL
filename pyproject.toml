@@ -3,13 +3,17 @@ requires = ["setuptools>=68.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "gui-grounding"
+name = "opengui-rl"
 version = "0.1.0"
-description = "Cross-Website GUI Grounding with Verifiable Reward Optimization"
+description = "Instruction-conditioned GUI grounding with verifiable reward optimization for computer-use agents"
 readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "MIT"}
-authors = [{name = "Che Cheng"}]
+authors = [
+    {name = "Che Cheng"},
+    {name = "Hongrong Yang"},
+    {name = "Qianyu Xie"},
+]
 
 dependencies = [
     "torch>=2.1.0",
@@ -41,6 +45,10 @@ dev = [
     "isort>=5.13.0",
     "pre-commit>=3.6.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/checheng117/OpenGUI-RL"
+Repository = "https://github.com/checheng117/OpenGUI-RL"
 
 [tool.setuptools.packages.find]
 where = ["src"]

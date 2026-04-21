@@ -1081,21 +1081,32 @@ def main() -> None:
             max_pixels=model_cfg.get("max_pixels"),
             log_generate_diagnostics=log_qwen_generate_diagnostics,
             coordinate_frame=model_cfg.get("coordinate_frame", "original"),
+            coordinate_format=model_cfg.get("coordinate_format", "absolute"),
             point_first_prompt=bool(model_cfg.get("point_first_prompt", False)),
+            target_field_order=model_cfg.get("target_field_order"),
+            point_primary_bbox_anchored_prompt=bool(model_cfg.get("point_primary_bbox_anchored_prompt", False)),
+            use_candidate_anchors=bool(model_cfg.get("use_candidate_anchors", False)),
+            max_prompt_candidates=int(model_cfg.get("max_prompt_candidates", 32)),
+            candidate_grounding_from_slot=bool(model_cfg.get("candidate_grounding_from_slot", True)),
             web_mobile_hotspot_prompt=bool(model_cfg.get("web_mobile_hotspot_prompt", False)),
             decoupled_point_native_decode=bool(model_cfg.get("decoupled_point_native_decode", False)),
+            coordinate_quantization_bins=model_cfg.get("coordinate_quantization_bins"),
+            point_native_secondary_bbox_only=bool(model_cfg.get("point_native_secondary_bbox_only", False)),
             edge_click_interior_threshold=float(model_cfg.get("edge_click_interior_threshold", 0.0)),
             edge_click_interior_position=float(model_cfg.get("edge_click_interior_position", 0.45)),
             adapter_path=adapter_path,
         )
         logger.info("Using Qwen primary candidate backend with model=%s", model_name)
         logger.info(
-            "Qwen runtime settings: dtype=%s attn_implementation=%s min_pixels=%s max_pixels=%s adapter=%s",
+            "Qwen runtime settings: dtype=%s attn_implementation=%s min_pixels=%s max_pixels=%s adapter=%s candidate_anchors=%s slot_grounding=%s coordinate_format=%s",
             qwen_model.backbone.resolved_torch_dtype,
             qwen_model.backbone.attn_implementation,
             qwen_model.backbone.min_pixels,
             qwen_model.backbone.max_pixels,
             adapter_path,
+            qwen_model.use_candidate_anchors,
+            qwen_model.candidate_grounding_from_slot,
+            qwen_model.coordinate_format,
         )
 
     reward_calc = VerifiableRewardCalculator(weights=cfg.get("reward", {}).get("weights"))
@@ -1507,6 +1518,11 @@ def main() -> None:
                             "provenance": {
                                 "source_model": model_name,
                                 "adapter_path": adapter_path,
+                                "stagea_representation": (
+                                    "hybrid_candidate_anchored"
+                                    if qwen_model.use_candidate_anchors
+                                    else "visual_only"
+                                ),
                                 "generation_mode": detail.get("generation_mode", "qwen_vl_generation"),
                                 "generation_temperature": detail.get("generation_temperature"),
                                 "attempt_index": detail.get("attempt_index"),
@@ -1516,6 +1532,13 @@ def main() -> None:
                                 "decoupled_point_native_decode": bool(
                                     detail.get("decoupled_point_native_decode", False)
                                 ),
+                                "coordinate_frame": qwen_model.coordinate_frame,
+                                "coordinate_format": qwen_model.coordinate_format,
+                                "target_field_order": qwen_model.target_field_order,
+                                "point_primary_bbox_anchored_prompt": qwen_model.point_primary_bbox_anchored_prompt,
+                                "use_candidate_anchors": qwen_model.use_candidate_anchors,
+                                "max_prompt_candidates": qwen_model.max_prompt_candidates,
+                                "candidate_grounding_from_slot": qwen_model.candidate_grounding_from_slot,
                                 "extra_provenance": detail.get("extra_provenance", {}),
                             },
                             "gating_metadata": detail.get("gate_metadata"),
@@ -1549,6 +1572,11 @@ def main() -> None:
                 "dom_candidates_available": bool(sample.dom_candidates),
                 "dom_candidates_count": len(sample.dom_candidates) if sample.dom_candidates else 0,
                 "backend": backend,
+                "stagea_representation": (
+                    "hybrid_candidate_anchored"
+                    if qwen_model and qwen_model.use_candidate_anchors
+                    else "visual_only"
+                ),
                 "checkpoint_model_path": str(checkpoint_model_path) if checkpoint_model_path else None,
                 "adapter_path": adapter_path,
                 "top_k": top_k,
@@ -1618,11 +1646,23 @@ def main() -> None:
         "max_new_tokens": int(model_cfg.get("max_new_tokens", 256)),
         "num_samples": len(samples),
         "adapter_path": adapter_path,
+        "stagea_representation": (
+            "hybrid_candidate_anchored"
+            if qwen_model and qwen_model.use_candidate_anchors
+            else "visual_only"
+        ),
         "first_choice_temperature": first_choice_temperature,
         "sampled_temperature": sampled_temperature,
         "generation_strategies": _to_jsonable(generation_strategies),
         "hybrid_candidate_recipes": _to_jsonable(hybrid_candidate_recipes),
         "source_gating": _to_jsonable(source_gating_cfg),
+        "coordinate_frame": model_cfg.get("coordinate_frame", "original"),
+        "coordinate_format": model_cfg.get("coordinate_format", "absolute"),
+        "target_field_order": model_cfg.get("target_field_order"),
+        "point_primary_bbox_anchored_prompt": bool(model_cfg.get("point_primary_bbox_anchored_prompt", False)),
+        "use_candidate_anchors": bool(model_cfg.get("use_candidate_anchors", False)),
+        "max_prompt_candidates": int(model_cfg.get("max_prompt_candidates", 32)),
+        "candidate_grounding_from_slot": bool(model_cfg.get("candidate_grounding_from_slot", True)),
     }
     final_failure_type = failure_rows[-1]["error_type"] if failure_rows else None
     summary = {
@@ -1671,6 +1711,13 @@ def main() -> None:
             "generation_strategies": _to_jsonable(generation_strategies),
             "hybrid_candidate_recipes": _to_jsonable(hybrid_candidate_recipes),
             "source_gating": _to_jsonable(source_gating_cfg),
+            "coordinate_frame": model_cfg.get("coordinate_frame", "original"),
+            "coordinate_format": model_cfg.get("coordinate_format", "absolute"),
+            "target_field_order": model_cfg.get("target_field_order"),
+            "point_primary_bbox_anchored_prompt": bool(model_cfg.get("point_primary_bbox_anchored_prompt", False)),
+            "use_candidate_anchors": bool(model_cfg.get("use_candidate_anchors", False)),
+            "max_prompt_candidates": int(model_cfg.get("max_prompt_candidates", 32)),
+            "candidate_grounding_from_slot": bool(model_cfg.get("candidate_grounding_from_slot", True)),
             "min_pixels": model_cfg.get("min_pixels"),
             "max_pixels": model_cfg.get("max_pixels"),
             "cuda_launch_blocking": os.getenv("CUDA_LAUNCH_BLOCKING", "0"),

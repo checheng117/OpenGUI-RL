@@ -10,6 +10,10 @@ from typing import Any
 from PIL import Image
 from transformers.models.qwen2_vl.image_processing_qwen2_vl import smart_resize
 
+from gui_grounding.data.candidate_representation import (
+    build_candidate_prompt_context,
+    resolve_candidate_slot_entry,
+)
 from gui_grounding.data.schemas import BBox, GroundingSample, PredictionResult
 from gui_grounding.models.base_model import BaseGroundingModel
 from gui_grounding.models.vlm_backbone import VLMBackbone
@@ -23,6 +27,7 @@ _BBOX_BIN_KEYS = ("bbox_bin", "bbox_bins", "bbox_proposal_bin")
 _BBOX_KEYS = _BBOX_BIN_KEYS + ("bbox_proposal", "predicted_bbox")
 _CLICK_KEYS = _POINT_BIN_KEYS + ("click_point", "predicted_click_point")
 _ELEMENT_ID_KEYS = ("element_hint_id", "predicted_element_id")
+_CANDIDATE_SLOT_KEYS = ("candidate_slot", "predicted_candidate_slot", "candidate_index")
 _POINT_ONLY_CLICK_KEYS = _POINT_BIN_KEYS + (
     "point_2d",
     "click_point",
@@ -58,9 +63,42 @@ def _clamp(v: float, lower: float, upper: float) -> float:
     return max(lower, min(upper, v))
 
 
+def _resolve_target_field_order(point_first_prompt: bool, target_field_order: str | None) -> str:
+    if target_field_order is None or not str(target_field_order).strip():
+        return "point_bbox_action" if point_first_prompt else "action_bbox_point"
+    normalized = str(target_field_order).strip().lower()
+    allowed = {
+        "action_bbox_point",
+        "point_bbox_action",
+        "point_action_bbox",
+    }
+    if normalized not in allowed:
+        raise ValueError(f"Unsupported target_field_order={target_field_order}")
+    return normalized
+
+
+def _ordered_core_fields(field_order: str) -> list[str]:
+    if field_order == "action_bbox_point":
+        return ["action", "bbox", "click"]
+    if field_order == "point_bbox_action":
+        return ["click", "bbox", "action"]
+    if field_order == "point_action_bbox":
+        return ["click", "action", "bbox"]
+    raise ValueError(f"Unsupported field_order={field_order}")
+
+
 def _safe_float(v: Any) -> float | None:
     try:
         return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _safe_int(v: Any) -> int | None:
+    try:
+        if v is None:
+            return None
+        return int(v)
     except (TypeError, ValueError):
         return None
 
@@ -367,6 +405,11 @@ class QwenVLGroundingModel(BaseGroundingModel):
         coordinate_frame: str = "original",
         coordinate_format: str = "absolute",
         point_first_prompt: bool = False,
+        target_field_order: str | None = None,
+        point_primary_bbox_anchored_prompt: bool = False,
+        use_candidate_anchors: bool = False,
+        max_prompt_candidates: int = 32,
+        candidate_grounding_from_slot: bool = True,
         web_mobile_hotspot_prompt: bool = False,
         decoupled_point_native_decode: bool = False,
         coordinate_quantization_bins: int | None = None,
@@ -388,6 +431,12 @@ class QwenVLGroundingModel(BaseGroundingModel):
         self.coordinate_frame = coordinate_frame
         self.coordinate_format = coordinate_format
         self.point_first_prompt = point_first_prompt
+        _resolve_target_field_order(self.point_first_prompt, target_field_order)
+        self.target_field_order = target_field_order
+        self.point_primary_bbox_anchored_prompt = bool(point_primary_bbox_anchored_prompt)
+        self.use_candidate_anchors = bool(use_candidate_anchors)
+        self.max_prompt_candidates = max(int(max_prompt_candidates), 0)
+        self.candidate_grounding_from_slot = bool(candidate_grounding_from_slot)
         self.web_mobile_hotspot_prompt = web_mobile_hotspot_prompt
         self.decoupled_point_native_decode = decoupled_point_native_decode
         self.coordinate_quantization_bins = (
@@ -481,6 +530,20 @@ class QwenVLGroundingModel(BaseGroundingModel):
                 )
         return coordinate_instruction, coord_size
 
+    def _candidate_context(self, sample: GroundingSample, image_size: tuple[int, int]) -> dict[str, Any]:
+        if not self.use_candidate_anchors:
+            return {
+                "entries": [],
+                "candidate_prompt_block": "",
+                "target_slot": None,
+                "candidate_count": 0,
+            }
+        return build_candidate_prompt_context(
+            sample,
+            image_size,
+            max_candidates=self.max_prompt_candidates,
+        )
+
     def _build_prompt(
         self,
         sample: GroundingSample,
@@ -490,7 +553,9 @@ class QwenVLGroundingModel(BaseGroundingModel):
         web_mobile_hotspot_prompt: bool | None = None,
     ) -> str:
         coordinate_instruction, _ = self._get_coordinate_instruction(image_size)
+        candidate_context = self._candidate_context(sample, image_size)
         resolved_point_first_prompt = self.point_first_prompt if point_first_prompt is None else bool(point_first_prompt)
+        resolved_field_order = _resolve_target_field_order(resolved_point_first_prompt, self.target_field_order)
         resolved_web_mobile_hotspot_prompt = (
             self.web_mobile_hotspot_prompt
             if web_mobile_hotspot_prompt is None
@@ -505,6 +570,12 @@ class QwenVLGroundingModel(BaseGroundingModel):
                     "Do not place point_bin on the bbox edge unless the target is extremely tiny.\n"
                     "Choose point_bin first, then make bbox_bin enclose that clicked target region.\n"
                 )
+                if self.point_primary_bbox_anchored_prompt:
+                    point_priority_instruction += (
+                        "bbox_bin is supporting structure for point_bin rather than the primary target.\n"
+                        "bbox_bin must contain the chosen point_bin and stay tight around the clicked element.\n"
+                        "If exact click placement and exact bbox edges conflict, prioritize point_bin and keep bbox_bin supportive.\n"
+                    )
             else:
                 point_priority_instruction = (
                     "Primary goal: place predicted_click_point on the exact spot a user should click.\n"
@@ -512,37 +583,43 @@ class QwenVLGroundingModel(BaseGroundingModel):
                     "Do not place the click point on the bbox corner or border unless the target is extremely tiny.\n"
                     "Choose the click point first, then make predicted_bbox enclose that clicked target region.\n"
                 )
+                if self.point_primary_bbox_anchored_prompt:
+                    point_priority_instruction += (
+                        "predicted_bbox is supporting structure for predicted_click_point rather than the primary target.\n"
+                        "predicted_bbox must contain the chosen click and stay tight around the clicked element.\n"
+                        "If exact click placement and exact bbox edges conflict, prioritize predicted_click_point and keep predicted_bbox supportive.\n"
+                    )
         hotspot_instruction = ""
         if resolved_web_mobile_hotspot_prompt:
             hotspot_instruction = _build_web_mobile_hotspot_instruction(sample)
+        candidate_guidance = ""
+        if candidate_context["candidate_prompt_block"]:
+            candidate_guidance = (
+                f"{candidate_context['candidate_prompt_block']}"
+                "Use the candidate anchors together with the screenshot.\n"
+                "If one candidate clearly matches the target, set candidate_slot to its 1-based index; otherwise use null.\n"
+                "When candidate_slot is set, predicted_click_point and predicted_bbox should correspond to that same candidate.\n"
+            )
         if self.coordinate_quantization_bins is not None:
-            schema_lines = [
-                '  "action_type": "click|type|select|hover",',
-                '  "bbox_bin": [x1_bin, y1_bin, x2_bin, y2_bin],',
-                '  "point_bin": [x_bin, y_bin]',
-            ]
-            if resolved_point_first_prompt:
-                schema_lines = [
-                    '  "point_bin": [x_bin, y_bin],',
-                    '  "action_type": "click|type|select|hover",',
-                    '  "bbox_bin": [x1_bin, y1_bin, x2_bin, y2_bin]',
-                ]
+            core_schema_lines = {
+                "action": '  "action_type": "click|type|select|hover",',
+                "bbox": '  "bbox_bin": [x1_bin, y1_bin, x2_bin, y2_bin],',
+                "click": '  "point_bin": [x_bin, y_bin]',
+            }
+            schema_lines = [core_schema_lines[name] for name in _ordered_core_fields(resolved_field_order)]
+            if self.use_candidate_anchors:
+                schema_lines.append('  "candidate_slot": 1 or null,')
         else:
-            schema_lines = [
-                '  "action_type": "click|type|select|hover",',
+            core_schema_lines = {
+                "action": '  "action_type": "click|type|select|hover",',
+                "bbox": '  "predicted_bbox": [x1, y1, x2, y2],',
+                "click": '  "predicted_click_point": [x, y],',
+            }
+            schema_lines = [core_schema_lines[name] for name in _ordered_core_fields(resolved_field_order)] + [
+                *(['  "candidate_slot": 1 or null,'] if self.use_candidate_anchors else []),
                 '  "predicted_element_id": "string or null",',
-                '  "predicted_bbox": [x1, y1, x2, y2],',
-                '  "predicted_click_point": [x, y],',
                 '  "confidence": 0.0',
             ]
-            if resolved_point_first_prompt:
-                schema_lines = [
-                    '  "predicted_click_point": [x, y],',
-                    '  "predicted_bbox": [x1, y1, x2, y2],',
-                    '  "action_type": "click|type|select|hover",',
-                    '  "predicted_element_id": "string or null",',
-                    '  "confidence": 0.0',
-                ]
         schema_text = "{\n" + "\n".join(schema_lines) + "\n}\n\n"
         return (
             "You are a GUI grounding model.\n"
@@ -552,6 +629,7 @@ class QwenVLGroundingModel(BaseGroundingModel):
             f"{coordinate_instruction}"
             f"{point_priority_instruction}"
             f"{hotspot_instruction}"
+            f"{candidate_guidance}"
             "If uncertain, still provide your best grounded guess.\n\n"
             f"Instruction: {sample.instruction}\n"
         )
@@ -682,6 +760,7 @@ class QwenVLGroundingModel(BaseGroundingModel):
         response_text: str,
         sample_id: str,
         image_size: tuple[int, int],
+        candidate_entries: list[dict[str, Any]] | None = None,
         *,
         point_first_prompt: bool | None = None,
         web_mobile_hotspot_prompt: bool | None = None,
@@ -693,6 +772,8 @@ class QwenVLGroundingModel(BaseGroundingModel):
         _, element_id = _first_present(data, _ELEMENT_ID_KEYS)
         if element_id is not None:
             element_id = str(element_id)
+        _, candidate_slot_data = _first_present(data, _CANDIDATE_SLOT_KEYS)
+        predicted_candidate_slot = _safe_int(candidate_slot_data)
 
         bbox_key, bbox_data = _first_present(data, _BBOX_KEYS)
         if bbox_key in _BBOX_BIN_KEYS and self.coordinate_quantization_bins is not None:
@@ -729,6 +810,19 @@ class QwenVLGroundingModel(BaseGroundingModel):
             coord_size=coord_size,
         )
 
+        candidate_slot_used = False
+        candidate_entry = resolve_candidate_slot_entry(candidate_entries or [], predicted_candidate_slot)
+        if candidate_entry is not None:
+            anchored_element_id = candidate_entry.get("element_id") or element_id
+            element_id = str(anchored_element_id) if anchored_element_id else None
+            anchor_bbox = candidate_entry.get("bbox")
+            if isinstance(anchor_bbox, BBox) and self.candidate_grounding_from_slot:
+                pred_bbox = anchor_bbox
+                pred_click = anchor_bbox.center
+                bbox_mode = "candidate_slot_anchor"
+                click_mode = "candidate_slot_anchor"
+                candidate_slot_used = True
+
         point_refinement = None
         pred_click, point_refinement = _refine_edge_click_in_bbox(
             pred_click=pred_click,
@@ -751,6 +845,15 @@ class QwenVLGroundingModel(BaseGroundingModel):
             data["_point_first_prompt"] = (
                 self.point_first_prompt if point_first_prompt is None else bool(point_first_prompt)
             )
+            data["_resolved_candidate_slot"] = predicted_candidate_slot
+            data["_candidate_slot_used_for_grounding"] = candidate_slot_used
+            if candidate_entry is not None:
+                data["_candidate_anchor_element_id"] = candidate_entry.get("element_id")
+                data["_candidate_anchor_text"] = candidate_entry.get("text")
+                data["_candidate_anchor_slot"] = candidate_entry.get("slot")
+                candidate_anchor_bbox = candidate_entry.get("bbox")
+                if isinstance(candidate_anchor_bbox, BBox):
+                    data["_candidate_anchor_bbox"] = list(candidate_anchor_bbox.as_tuple())
             data["_web_mobile_hotspot_prompt"] = (
                 self.web_mobile_hotspot_prompt
                 if web_mobile_hotspot_prompt is None
@@ -765,6 +868,7 @@ class QwenVLGroundingModel(BaseGroundingModel):
             predicted_bbox=pred_bbox,
             predicted_click_point=pred_click,
             predicted_element_id=element_id,
+            predicted_candidate_slot=predicted_candidate_slot,
             confidence=confidence,
         )
         return result, data
@@ -898,6 +1002,7 @@ class QwenVLGroundingModel(BaseGroundingModel):
                 response_text=fallback_raw_text,
                 sample_id=sample.sample_id,
                 image_size=image.size,
+                candidate_entries=self._candidate_context(sample, image.size)["entries"],
                 point_first_prompt=resolved_point_first_prompt,
                 web_mobile_hotspot_prompt=resolved_web_mobile_hotspot_prompt,
             )
@@ -1086,10 +1191,12 @@ class QwenVLGroundingModel(BaseGroundingModel):
             num_return_sequences=1,
         )
         raw_text = outputs[0] if outputs else ""
+        candidate_context = self._candidate_context(sample, image.size)
         pred, parsed = self._parse_prediction(
             response_text=raw_text,
             sample_id=sample.sample_id,
             image_size=image.size,
+            candidate_entries=candidate_context["entries"],
             point_first_prompt=resolved_point_first_prompt,
             web_mobile_hotspot_prompt=resolved_web_mobile_hotspot_prompt,
         )

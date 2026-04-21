@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from io import BytesIO
 from pathlib import Path
 from typing import Optional
@@ -88,7 +89,27 @@ def _parse_bbox_xywh(bbox_str: str) -> Optional[BBox]:
         return None
 
 
-def _parse_candidate(raw_json: str) -> Optional[CandidateElement]:
+def _normalize_candidate_text(text: str, *, max_chars: int = 160) -> str:
+    normalized = " ".join(str(text or "").split())
+    if len(normalized) > max_chars:
+        return normalized[: max_chars - 1].rstrip() + "…"
+    return normalized
+
+
+def _extract_cleaned_html_node_text(cleaned_html: str, backend_node_id: str) -> str:
+    if not cleaned_html or not backend_node_id:
+        return ""
+    match = re.search(
+        rf'<[^>]+backend_node_id="{re.escape(str(backend_node_id))}"[^>]*>(.*?)</[^>]+>',
+        cleaned_html,
+        flags=re.S,
+    )
+    if not match:
+        return ""
+    return _normalize_candidate_text(re.sub(r"<[^>]+>", " ", match.group(1)))
+
+
+def _parse_candidate(raw_json: str, cleaned_html: str = "") -> Optional[CandidateElement]:
     """Parse a single JSON-encoded candidate element."""
     try:
         obj = json.loads(raw_json)
@@ -107,10 +128,24 @@ def _parse_candidate(raw_json: str) -> Optional[CandidateElement]:
     bbox = _parse_bbox_xywh(attrs.get("bounding_box_rect", ""))
 
     text_parts = []
-    for key in ("aria_label", "placeholder", "title", "alt", "value"):
+    for key in ("aria_label", "placeholder", "title", "alt", "value", "input_value", "text_value"):
         if key in attrs and attrs[key]:
             text_parts.append(str(attrs[key]))
-    text = " | ".join(text_parts) if text_parts else ""
+    node_text = _extract_cleaned_html_node_text(cleaned_html, node_id)
+    if node_text:
+        text_parts.append(node_text)
+    deduped_parts: list[str] = []
+    seen_texts: set[str] = set()
+    for part in text_parts:
+        cleaned = _normalize_candidate_text(part)
+        if not cleaned:
+            continue
+        lowered = cleaned.lower()
+        if lowered in seen_texts:
+            continue
+        seen_texts.add(lowered)
+        deduped_parts.append(cleaned)
+    text = " | ".join(deduped_parts) if deduped_parts else ""
 
     clean_attrs = {
         k: str(v) for k, v in attrs.items()
@@ -349,6 +384,7 @@ class Mind2WebDataset:
             "screenshot",
             "confirmed_task",
             "operation",
+            "cleaned_html",
             "pos_candidates",
             "neg_candidates",
             "target_action_reprs",
@@ -402,13 +438,14 @@ class Mind2WebDataset:
 
         instruction = row.get("confirmed_task", "")
         action_type, typed_value = _parse_operation(row.get("operation", "{}"))
+        cleaned_html = row.get("cleaned_html", "") or ""
 
         # --- Target element bbox from pos_candidates ---
         target_bbox: Optional[BBox] = None
         target_element_id: Optional[str] = None
         pos_candidates_raw = row.get("pos_candidates", [])
         for c_str in pos_candidates_raw:
-            cand = _parse_candidate(c_str)
+            cand = _parse_candidate(c_str, cleaned_html=cleaned_html)
             if cand is not None and cand.bbox is not None:
                 target_bbox = cand.bbox
                 target_element_id = cand.element_id
@@ -419,13 +456,13 @@ class Mind2WebDataset:
         # --- DOM candidates (pos + neg, up to max_candidates) ---
         dom_candidates: list[CandidateElement] = []
         for c_str in pos_candidates_raw:
-            cand = _parse_candidate(c_str)
+            cand = _parse_candidate(c_str, cleaned_html=cleaned_html)
             if cand is not None:
                 dom_candidates.append(cand)
         for c_str in row.get("neg_candidates", []):
             if len(dom_candidates) >= self.max_candidates:
                 break
-            cand = _parse_candidate(c_str)
+            cand = _parse_candidate(c_str, cleaned_html=cleaned_html)
             if cand is not None:
                 dom_candidates.append(cand)
 
